@@ -1,0 +1,19 @@
+[package]
+name = "kircast_desktop"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.71"
+chrono = "0.4"
+env_logger = "0.10"
+gstreamer = "0.20"
+gstreamer-app = "0.20"
+log = "0.4"
+airplay2-protocol = { path = "../../../Work/Projects/YC/airplay2-protocol" }
+tokio = {version = "1", features = ["full"]}
+
+[profile.dev]
+overflow-checks = false
