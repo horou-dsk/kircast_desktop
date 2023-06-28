@@ -1,5 +1,4 @@
-use std::str::FromStr;
-use std::sync::RwLock;
+use std::{cell::UnsafeCell, str::FromStr};
 
 use airplay2_protocol::airplay::airplay_consumer::AirPlayConsumer;
 use airplay2_protocol::airplay::lib::audio_stream_info::CompressionType;
@@ -11,8 +10,10 @@ pub struct VideoConsumer {
     alac: (gst::Pipeline, AppSrc),
     aac_eld: (gst::Pipeline, AppSrc),
     h264: (gst::Pipeline, AppSrc),
-    audio_compression_type: RwLock<CompressionType>,
+    audio_compression_type: UnsafeCell<CompressionType>,
 }
+
+unsafe impl Sync for VideoConsumer {}
 
 impl Default for VideoConsumer {
     fn default() -> Self {
@@ -157,7 +158,7 @@ impl Default for VideoConsumer {
             alac: (alac_pipeline, alac_appsrc),
             aac_eld: (aac_eld_pipeline, aac_eld_appsrc),
             h264: (h264pipeline, h264_src),
-            audio_compression_type: RwLock::new(CompressionType::Alac),
+            audio_compression_type: CompressionType::Alac.into(),
         }
     }
 }
@@ -206,7 +207,7 @@ impl AirPlayConsumer for VideoConsumer {
             "on_audio_format... type = {:?}",
             audio_stream_info.compression_type
         );
-        *self.audio_compression_type.write().unwrap() = audio_stream_info.compression_type;
+        unsafe { *self.audio_compression_type.get() = audio_stream_info.compression_type };
         self.alac
             .0
             .set_state(gst::State::Playing)
@@ -220,7 +221,7 @@ impl AirPlayConsumer for VideoConsumer {
     fn on_audio(&self, bytes: Vec<u8>) {
         // log::info!("on_audio bytes = {}", bytes.len());
         let buffer = gst::Buffer::from_mut_slice(bytes);
-        match *self.audio_compression_type.read().unwrap() {
+        match unsafe { &*self.audio_compression_type.get() } {
             CompressionType::Alac => {
                 self.alac.1.push_buffer(buffer).ok();
             }
