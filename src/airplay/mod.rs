@@ -167,12 +167,19 @@ impl AirPlayConsumer for VideoConsumer {
         let buffer = gst::Buffer::from_mut_slice(bytes);
         self.h264.1.push_buffer(buffer).ok();
         // log::info!("on_video...");
+        // if let Some(child) = self.ffplay.write().unwrap().as_mut() {
+        //     if let Some(child_stdin) = child.stdin.as_mut() {
+        //         child_stdin.write_all(&bytes).unwrap();
+        //         child_stdin.flush().unwrap();
+        //     }
+        // }
     }
 
     fn on_video_format(
         &self,
         video_stream_info: airplay2_protocol::airplay::lib::video_stream_info::VideoStreamInfo,
     ) {
+        // self.start_ffplay();
         self.h264
             .0
             .set_state(gst::State::Playing)
@@ -211,6 +218,7 @@ impl AirPlayConsumer for VideoConsumer {
     }
 
     fn on_audio(&self, bytes: Vec<u8>) {
+        // log::info!("on_audio bytes = {}", bytes.len());
         let buffer = gst::Buffer::from_mut_slice(bytes);
         match *self.audio_compression_type.read().unwrap() {
             CompressionType::Alac => {
