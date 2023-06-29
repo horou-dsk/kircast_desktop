@@ -104,7 +104,7 @@ impl Default for VideoConsumer {
                 h264_src = Some(elem.dynamic_cast::<gst_app::AppSrc>().unwrap());
                 break;
             }
-        } //gst_app::AppSrc::from_object(pipeline.downcast_ref().unwrap());
+        }
 
         let caps = gst::Caps::from_str(
             "video/x-h264,colorimetry=bt709,stream-format=(string)byte-stream,alignment=(string)au",
@@ -119,41 +119,6 @@ impl Default for VideoConsumer {
         h264_src.set_format(gst::Format::Time);
         h264_src.set_property("emit-signals", true);
 
-        // let caps = Caps::from_str("video/x-h264,colorimetry=bt709,stream-format=(string)byte-stream,alignment=(string)au").unwrap();
-        // let h264_appsrc = AppSrc::builder()
-        //     .is_live(true)
-        //     .stream_type(AppStreamType::Stream)
-        //     .caps(&caps)
-        //     .format(gst::Format::Time)
-        //     .build();
-
-        // let h264parse = gst::ElementFactory::make("h264parse").build().unwrap();
-        // let avdec_h264 = gst::ElementFactory::make("avdec_h264").build().unwrap();
-        // let videoconvert = gst::ElementFactory::make("videoconvert").build().unwrap();
-        // let autovideosink = gst::ElementFactory::make("autovideosink")
-        //     // .property("sync", false)
-        //     // .property("emit-signals", true)
-        //     .build()
-        //     .unwrap();
-
-        // h264pipeline
-        //     .add_many(&[
-        //         h264_appsrc.upcast_ref(),
-        //         &h264parse,
-        //         &avdec_h264,
-        //         &videoconvert,
-        //         &autovideosink,
-        //     ])
-        //     .unwrap();
-        // gst::Element::link_many(&[
-        //     h264_appsrc.upcast_ref(),
-        //     &h264parse,
-        //     &avdec_h264,
-        //     &videoconvert,
-        //     &autovideosink,
-        // ])
-        //     .unwrap();
-
         Self {
             alac: (alac_pipeline, alac_appsrc),
             aac_eld: (aac_eld_pipeline, aac_eld_appsrc),
@@ -167,20 +132,12 @@ impl AirPlayConsumer for VideoConsumer {
     fn on_video(&self, bytes: Vec<u8>) {
         let buffer = gst::Buffer::from_mut_slice(bytes);
         self.h264.1.push_buffer(buffer).ok();
-        // log::info!("on_video...");
-        // if let Some(child) = self.ffplay.write().unwrap().as_mut() {
-        //     if let Some(child_stdin) = child.stdin.as_mut() {
-        //         child_stdin.write_all(&bytes).unwrap();
-        //         child_stdin.flush().unwrap();
-        //     }
-        // }
     }
 
     fn on_video_format(
         &self,
         video_stream_info: airplay2_protocol::airplay::lib::video_stream_info::VideoStreamInfo,
     ) {
-        // self.start_ffplay();
         self.h264
             .0
             .set_state(gst::State::Playing)
@@ -219,7 +176,6 @@ impl AirPlayConsumer for VideoConsumer {
     }
 
     fn on_audio(&self, bytes: Vec<u8>) {
-        // log::info!("on_audio bytes = {}", bytes.len());
         let buffer = gst::Buffer::from_mut_slice(bytes);
         match unsafe { &*self.audio_compression_type.get() } {
             CompressionType::Alac => {
@@ -229,11 +185,10 @@ impl AirPlayConsumer for VideoConsumer {
                 self.aac_eld.1.push_buffer(buffer).ok();
             }
         }
-        // self.tx.send(bytes).unwrap();
-        // log::info!("on_audio...");
     }
 
     fn on_audio_src_disconnect(&self) {
+        log::info!("OnAudio Disconnect...");
         self.alac
             .0
             .set_state(gst::State::Null)
