@@ -7,8 +7,8 @@ use gstreamer::{self as gst, prelude::*};
 use gstreamer_app::{self as gst_app, AppSrc, AppStreamType};
 
 pub struct VideoConsumer {
-    alac: (gst::Pipeline, AppSrc),
-    aac_eld: (gst::Pipeline, AppSrc),
+    alac: (gst::Pipeline, AppSrc, gst::Element),
+    aac_eld: (gst::Pipeline, AppSrc, gst::Element),
     h264: (gst::Pipeline, AppSrc),
     audio_compression_type: UnsafeCell<CompressionType>,
 }
@@ -29,6 +29,7 @@ impl Default for VideoConsumer {
             .format(gst::Format::Time)
             .build();
 
+        let alac_volume = gst::ElementFactory::make("volume").build().unwrap();
         let avdec_alac = gst::ElementFactory::make("avdec_alac").build().unwrap();
         let audioconvert = gst::ElementFactory::make("audioconvert").build().unwrap();
         let audioresample = gst::ElementFactory::make("audioresample").build().unwrap();
@@ -40,6 +41,7 @@ impl Default for VideoConsumer {
         alac_pipeline
             .add_many(&[
                 alac_appsrc.upcast_ref(),
+                &alac_volume,
                 &avdec_alac,
                 &audioconvert,
                 &audioresample,
@@ -50,6 +52,7 @@ impl Default for VideoConsumer {
             alac_appsrc.upcast_ref(),
             &avdec_alac,
             &audioconvert,
+            &alac_volume,
             &audioresample,
             &autoaudiosink,
         ])
@@ -64,6 +67,7 @@ impl Default for VideoConsumer {
             .caps(&caps)
             .format(gst::Format::Time)
             .build();
+        let aac_eld_volume = gst::ElementFactory::make("volume").build().unwrap();
         let avdec_aac = gst::ElementFactory::make("avdec_aac").build().unwrap();
         let audioconvert = gst::ElementFactory::make("audioconvert").build().unwrap();
         let audioresample = gst::ElementFactory::make("audioresample").build().unwrap();
@@ -76,6 +80,7 @@ impl Default for VideoConsumer {
                 aac_eld_appsrc.upcast_ref(),
                 &avdec_aac,
                 &audioconvert,
+                &aac_eld_volume,
                 &audioresample,
                 &autoaudiosink,
             ])
@@ -84,6 +89,7 @@ impl Default for VideoConsumer {
             aac_eld_appsrc.upcast_ref(),
             &avdec_aac,
             &audioconvert,
+            &aac_eld_volume,
             &audioresample,
             &autoaudiosink,
         ])
@@ -120,8 +126,8 @@ impl Default for VideoConsumer {
         h264_src.set_property("emit-signals", true);
 
         Self {
-            alac: (alac_pipeline, alac_appsrc),
-            aac_eld: (aac_eld_pipeline, aac_eld_appsrc),
+            alac: (alac_pipeline, alac_appsrc, alac_volume),
+            aac_eld: (aac_eld_pipeline, aac_eld_appsrc, aac_eld_volume),
             h264: (h264pipeline, h264_src),
             audio_compression_type: CompressionType::Alac.into(),
         }
@@ -197,5 +203,17 @@ impl AirPlayConsumer for VideoConsumer {
             .0
             .set_state(gst::State::Null)
             .expect("Unable to set the pipeline to the `Null` state");
+    }
+
+    fn on_volume(&self, volume: f32) {
+        let volume = volume / 30.0 + 1.0;
+        match unsafe { &*self.audio_compression_type.get() } {
+            CompressionType::Alac => {
+                self.alac.2.set_property("volume", volume as f64);
+            }
+            _ => {
+                self.aac_eld.2.set_property("volume", volume as f64);
+            }
+        }
     }
 }
