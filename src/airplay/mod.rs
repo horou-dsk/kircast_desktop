@@ -5,6 +5,9 @@ use airplay2_protocol::airplay::lib::audio_stream_info::CompressionType;
 use gst::Caps;
 use gstreamer::{self as gst, prelude::*};
 use gstreamer_app::{self as gst_app, AppSrc, AppStreamType};
+use windows_sys::Win32::System::Power::{
+    SetThreadExecutionState, ES_CONTINUOUS, ES_DISPLAY_REQUIRED,
+};
 
 pub struct VideoConsumer {
     alac: (gst::Pipeline, AppSrc, gst::Element),
@@ -144,6 +147,9 @@ impl AirPlayConsumer for VideoConsumer {
         &self,
         video_stream_info: airplay2_protocol::airplay::lib::video_stream_info::VideoStreamInfo,
     ) {
+        unsafe {
+            SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED);
+        }
         self.h264
             .0
             .set_state(gst::State::Playing)
@@ -156,6 +162,9 @@ impl AirPlayConsumer for VideoConsumer {
 
     fn on_video_src_disconnect(&self) {
         log::info!("OnVideo Disconnect...");
+        unsafe {
+            SetThreadExecutionState(ES_CONTINUOUS);
+        }
         self.h264
             .0
             .set_state(gst::State::Null)

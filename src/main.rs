@@ -7,19 +7,12 @@ use airplay2_protocol::setup_log;
 use kircast_desktop::airplay::VideoConsumer;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use windows_sys::Win32::System::Power::{
-    SetThreadExecutionState, ES_CONTINUOUS, ES_DISPLAY_REQUIRED,
-};
 
 #[tokio::main]
 async fn main() -> tokio::io::Result<()> {
     setup_log();
     let port = 31927;
     let name = "RustAirplay";
-
-    unsafe {
-        SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED);
-    }
 
     // pin码认证功能缺失...
     let _air = AirPlayBonjour::new(name, port, false);
