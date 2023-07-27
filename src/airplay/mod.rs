@@ -1,3 +1,5 @@
+mod ffmpeg_sdl;
+
 use std::{cell::UnsafeCell, str::FromStr};
 
 use airplay2_protocol::airplay::airplay_consumer::AirPlayConsumer;
@@ -9,11 +11,14 @@ use windows_sys::Win32::System::Power::{
     SetThreadExecutionState, ES_CONTINUOUS, ES_DISPLAY_REQUIRED,
 };
 
+use self::ffmpeg_sdl::SdlFfmpeg;
+
 pub struct VideoConsumer {
     alac: (gst::Pipeline, AppSrc, gst::Element),
     aac_eld: (gst::Pipeline, AppSrc, gst::Element),
     h264: (gst::Pipeline, AppSrc),
     audio_compression_type: UnsafeCell<CompressionType>,
+    ffmpeg: SdlFfmpeg,
 }
 
 unsafe impl Sync for VideoConsumer {}
@@ -133,14 +138,20 @@ impl Default for VideoConsumer {
             aac_eld: (aac_eld_pipeline, aac_eld_appsrc, aac_eld_volume),
             h264: (h264pipeline, h264_src),
             audio_compression_type: CompressionType::Alac.into(),
+            ffmpeg: SdlFfmpeg::new(1920, 1080),
         }
     }
 }
 
 impl AirPlayConsumer for VideoConsumer {
-    fn on_video(&self, bytes: Vec<u8>) {
-        let buffer = gst::Buffer::from_mut_slice(bytes);
-        self.h264.1.push_buffer(buffer).ok();
+    fn on_video(&self, bytes: &[u8]) {
+        // unsafe {
+        //     let writer = H264_FILE.as_mut().unwrap();
+        //     writer.write_all(bytes).unwrap();
+        // }
+        let _ = self.ffmpeg.push_buffer(bytes);
+        // let buffer = gst::Buffer::from_slice(bytes.to_vec());
+        // self.h264.1.push_buffer(buffer).ok();
     }
 
     fn on_video_format(
@@ -149,11 +160,14 @@ impl AirPlayConsumer for VideoConsumer {
     ) {
         unsafe {
             SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED);
+            // let file = File::create("./tmp/h264").unwrap();
+            // H264_FILE = Some(BufWriter::new(file));
         }
-        self.h264
-            .0
-            .set_state(gst::State::Playing)
-            .expect("Unable to set the pipeline to the `Playing` state");
+        self.ffmpeg.start().expect("ffmpeg start error");
+        // self.h264
+        //     .0
+        //     .set_state(gst::State::Playing)
+        //     .expect("Unable to set the pipeline to the `Playing` state");
         log::info!(
             "OnVideo Format... {:?}",
             video_stream_info.get_stream_connection_id()
@@ -164,11 +178,14 @@ impl AirPlayConsumer for VideoConsumer {
         log::info!("OnVideo Disconnect...");
         unsafe {
             SetThreadExecutionState(ES_CONTINUOUS);
+            // let mut writer = H264_FILE.take().unwrap();
+            // writer.flush().unwrap();
         }
-        self.h264
-            .0
-            .set_state(gst::State::Null)
-            .expect("Unable to set the pipeline to the `Null` state");
+        self.ffmpeg.stop();
+        // self.h264
+        //     .0
+        //     .set_state(gst::State::Null)
+        //     .expect("Unable to set the pipeline to the `Null` state");
     }
 
     fn on_audio_format(
@@ -190,8 +207,8 @@ impl AirPlayConsumer for VideoConsumer {
             .expect("Unable to set the pipeline to the `Playing` state");
     }
 
-    fn on_audio(&self, bytes: Vec<u8>) {
-        let buffer = gst::Buffer::from_mut_slice(bytes);
+    fn on_audio(&self, bytes: &[u8]) {
+        let buffer = gst::Buffer::from_slice(bytes.to_vec());
         match unsafe { &*self.audio_compression_type.get() } {
             CompressionType::Alac => {
                 self.alac.1.push_buffer(buffer).ok();

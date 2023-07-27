@@ -6,19 +6,19 @@ version = "0.1.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-airplay2-protocol = {git = "https://github.com/horou-dsk/airplay-protocol.git"}
+airplay2-protocol = { git = "https://github.com/horou-dsk/airplay-protocol.git", branch = "pef_opt" }
 anyhow = "1.0.71"
 chrono = "0.4"
 env_logger = "0.10"
 gstreamer = "0.20"
 gstreamer-app = "0.20"
 log = "0.4"
-tokio = {version = "1", features = ["full"]}
+tokio = { version = "1", features = ["full"] }
+ffmpeg-next = { version = "6", features = ["default"] }
+sdl2 = "0.35"
 
 [dependencies.windows-sys]
-features = [
-  "Win32_System_Power",
-]
+features = ["Win32_System_Power"]
 version = "0.48"
 
 [profile.dev]
