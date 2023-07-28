@@ -1,6 +1,10 @@
 use std::{
     cell::UnsafeCell,
-    sync::mpsc::{self, Sender, TryRecvError},
+    sync::{
+        atomic::AtomicBool,
+        mpsc::{self, Sender},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -17,28 +21,25 @@ use sdl2::{
 pub(super) struct SdlFfmpeg {
     width: u32,
     height: u32,
-    video_decoder: UnsafeCell<ffmpeg::decoder::Video>,
-    tx: UnsafeCell<Option<Sender<ffmpeg::frame::Video>>>,
+    tx: UnsafeCell<Option<Sender<Packet>>>,
 }
+
+struct VideoFrame(UnsafeCell<Option<ffmpeg::frame::Video>>);
+
+unsafe impl Sync for VideoFrame {}
+unsafe impl Send for VideoFrame {}
 
 impl SdlFfmpeg {
     pub fn new(width: u32, height: u32) -> Self {
-        let codec = ffmpeg::codec::decoder::find(Id::H264).unwrap();
-        let decoder = ffmpeg::decoder::new()
-            .open_as(codec)
-            .unwrap()
-            .video()
-            .unwrap();
         Self {
             width,
             height,
-            video_decoder: UnsafeCell::new(decoder),
             tx: UnsafeCell::new(None),
         }
     }
 
     pub fn start(&self) -> Result<(), String> {
-        let (tx, rx) = mpsc::channel::<ffmpeg::frame::Video>();
+        let (tx, rx) = mpsc::channel::<Packet>();
 
         let width = self.width;
         let height = self.height;
@@ -59,35 +60,45 @@ impl SdlFfmpeg {
                 .unwrap();
             let mut event_pump = sdl_context.event_pump().unwrap();
 
+            let codec = ffmpeg::codec::decoder::find(Id::H264).unwrap();
+            let mut decoder = ffmpeg::decoder::new()
+                .open_as(codec)
+                .unwrap()
+                .video()
+                .unwrap();
+
+            let is_close = Arc::new(AtomicBool::new(false));
+            let frame = Arc::new(VideoFrame(UnsafeCell::new(None)));
+
+            {
+                let root_frame = frame.clone();
+                let is_close = is_close.clone();
+                std::thread::spawn(move || {
+                    while let Ok(packet) = rx.recv() {
+                        if let Err(err) = decoder.send_packet(&packet) {
+                            log::error!("send packet error! {:?}", err);
+                        } else {
+                            let mut frame = ffmpeg::frame::Video::empty();
+                            while decoder.receive_frame(&mut frame).is_ok() {
+                                let mut scaler = ffmpeg::software::converter(
+                                    (frame.width(), frame.height()),
+                                    frame.format(),
+                                    Pixel::RGB24,
+                                )
+                                .unwrap();
+                                let mut rgb_frame = ffmpeg::frame::Video::empty();
+                                scaler.run(&frame, &mut rgb_frame).unwrap();
+                                unsafe {
+                                    (*root_frame.0.get()).replace(rgb_frame);
+                                }
+                            }
+                        }
+                    }
+                    is_close.store(true, std::sync::atomic::Ordering::Relaxed);
+                });
+            }
+
             'running: loop {
-                match rx.try_recv() {
-                    Ok(frame) => {
-                        canvas
-                            .with_texture_canvas(&mut texture, |texture_canvas| {
-                                texture_canvas.set_draw_color(Color::RGB(0, 0, 0));
-                                texture_canvas.clear();
-                            })
-                            .expect("clear texture error!");
-                        texture
-                            .update(
-                                Rect::new(
-                                    ((width - frame.width()) / 2) as i32,
-                                    ((height - frame.height()) / 2) as i32,
-                                    frame.width(),
-                                    frame.height(),
-                                ),
-                                frame.data(0),
-                                frame.stride(0),
-                            )
-                            .unwrap();
-                        canvas.copy(&texture, None, None).unwrap();
-                        canvas.present();
-                    }
-                    Err(TryRecvError::Empty) => (),
-                    Err(TryRecvError::Disconnected) => {
-                        break 'running;
-                    }
-                }
                 for event in event_pump.poll_iter() {
                     match event {
                         Event::Quit { .. }
@@ -97,6 +108,31 @@ impl SdlFfmpeg {
                         } => break 'running,
                         _ => {}
                     }
+                }
+                if is_close.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+                if let Some(rgb_frame) = unsafe { (*frame.0.get()).take() } {
+                    canvas
+                        .with_texture_canvas(&mut texture, |texture_canvas| {
+                            texture_canvas.set_draw_color(Color::RGB(0, 0, 0));
+                            texture_canvas.clear();
+                        })
+                        .expect("clear texture error!");
+                    texture
+                        .update(
+                            Rect::new(
+                                ((width - rgb_frame.width()) / 2) as i32,
+                                ((height - rgb_frame.height()) / 2) as i32,
+                                rgb_frame.width(),
+                                rgb_frame.height(),
+                            ),
+                            rgb_frame.data(0),
+                            rgb_frame.stride(0),
+                        )
+                        .unwrap();
+                    canvas.copy(&texture, None, None).unwrap();
+                    canvas.present();
                 }
                 ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 144));
             }
@@ -110,23 +146,10 @@ impl SdlFfmpeg {
     }
 
     pub fn push_buffer(&self, buf: &[u8]) -> anyhow::Result<()> {
-        let video_decoder = unsafe { &mut *self.video_decoder.get() };
         let packet = Packet::copy(buf);
-        let mut frame = ffmpeg::frame::Video::empty();
-        video_decoder.send_packet(&packet)?;
-        if video_decoder.receive_frame(&mut frame).is_ok() {
-            if let Some(tx) = unsafe { (*self.tx.get()).as_ref() } {
-                let mut scaler = ffmpeg::software::converter(
-                    (frame.width(), frame.height()),
-                    frame.format(),
-                    Pixel::RGB24,
-                )
-                .unwrap();
-                let mut rgb_frame = ffmpeg::frame::Video::empty();
-                scaler.run(&frame, &mut rgb_frame).unwrap();
-                if tx.send(rgb_frame).is_err() {
-                    self.stop();
-                }
+        if let Some(tx) = unsafe { (*self.tx.get()).as_ref() } {
+            if tx.send(packet).is_err() {
+                self.stop();
             }
         }
         Ok(())

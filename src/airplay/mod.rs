@@ -16,7 +16,7 @@ use self::ffmpeg_sdl::SdlFfmpeg;
 pub struct VideoConsumer {
     alac: (gst::Pipeline, AppSrc, gst::Element),
     aac_eld: (gst::Pipeline, AppSrc, gst::Element),
-    h264: (gst::Pipeline, AppSrc),
+    _h264: (gst::Pipeline, AppSrc),
     audio_compression_type: UnsafeCell<CompressionType>,
     ffmpeg: SdlFfmpeg,
 }
@@ -136,7 +136,7 @@ impl Default for VideoConsumer {
         Self {
             alac: (alac_pipeline, alac_appsrc, alac_volume),
             aac_eld: (aac_eld_pipeline, aac_eld_appsrc, aac_eld_volume),
-            h264: (h264pipeline, h264_src),
+            _h264: (h264pipeline, h264_src),
             audio_compression_type: CompressionType::Alac.into(),
             ffmpeg: SdlFfmpeg::new(1920, 1080),
         }
@@ -149,7 +149,9 @@ impl AirPlayConsumer for VideoConsumer {
         //     let writer = H264_FILE.as_mut().unwrap();
         //     writer.write_all(bytes).unwrap();
         // }
-        let _ = self.ffmpeg.push_buffer(bytes);
+        if let Err(err) = self.ffmpeg.push_buffer(bytes) {
+            log::error!("ffmpeg push_buffer error! {:?}", err);
+        }
         // let buffer = gst::Buffer::from_slice(bytes.to_vec());
         // self.h264.1.push_buffer(buffer).ok();
     }
