@@ -7,7 +7,11 @@ use std::{
 use ffmpeg::{format::Pixel, Packet};
 use ffmpeg_next::{self as ffmpeg, codec::Id};
 use sdl2::{
-    event::Event, keyboard::Keycode, pixels::PixelFormatEnum, rect::Rect, render::TextureAccess,
+    event::Event,
+    keyboard::Keycode,
+    pixels::{Color, PixelFormatEnum},
+    rect::Rect,
+    render::TextureAccess,
 };
 
 pub(super) struct SdlFfmpeg {
@@ -51,25 +55,32 @@ impl SdlFfmpeg {
             let texture_creator = canvas.texture_creator();
 
             let mut texture = texture_creator
-                .create_texture(PixelFormatEnum::RGB24, TextureAccess::Static, width, height)
+                .create_texture(PixelFormatEnum::RGB24, TextureAccess::Target, width, height)
                 .unwrap();
             let mut event_pump = sdl_context.event_pump().unwrap();
 
             'running: loop {
                 match rx.try_recv() {
                     Ok(frame) => {
-                        // TODO: 界面渲染清除
-                        canvas.clear();
+                        canvas
+                            .with_texture_canvas(&mut texture, |texture_canvas| {
+                                texture_canvas.set_draw_color(Color::RGB(0, 0, 0));
+                                texture_canvas.clear();
+                            })
+                            .expect("clear texture error!");
                         texture
                             .update(
-                                Rect::new(0, 0, frame.width(), frame.height()),
+                                Rect::new(
+                                    ((width - frame.width()) / 2) as i32,
+                                    ((height - frame.height()) / 2) as i32,
+                                    frame.width(),
+                                    frame.height(),
+                                ),
                                 frame.data(0),
                                 frame.stride(0),
                             )
                             .unwrap();
-                        canvas
-                            .copy(&texture, None, Rect::new(0, 0, width, height))
-                            .unwrap();
+                        canvas.copy(&texture, None, None).unwrap();
                         canvas.present();
                     }
                     Err(TryRecvError::Empty) => (),
@@ -104,19 +115,17 @@ impl SdlFfmpeg {
         let mut frame = ffmpeg::frame::Video::empty();
         video_decoder.send_packet(&packet)?;
         if video_decoder.receive_frame(&mut frame).is_ok() {
-            unsafe {
-                if let Some(tx) = (*self.tx.get()).as_ref() {
-                    let mut scaler = ffmpeg::software::converter(
-                        (frame.width(), frame.height()),
-                        frame.format(),
-                        Pixel::RGB24,
-                    )
-                    .unwrap();
-                    let mut rgb_frame = ffmpeg::frame::Video::empty();
-                    scaler.run(&frame, &mut rgb_frame).unwrap();
-                    if tx.send(rgb_frame).is_err() {
-                        self.stop();
-                    }
+            if let Some(tx) = unsafe { (*self.tx.get()).as_ref() } {
+                let mut scaler = ffmpeg::software::converter(
+                    (frame.width(), frame.height()),
+                    frame.format(),
+                    Pixel::RGB24,
+                )
+                .unwrap();
+                let mut rgb_frame = ffmpeg::frame::Video::empty();
+                scaler.run(&frame, &mut rgb_frame).unwrap();
+                if tx.send(rgb_frame).is_err() {
+                    self.stop();
                 }
             }
         }
