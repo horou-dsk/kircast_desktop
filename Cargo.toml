@@ -15,11 +15,16 @@ gstreamer-app = "0.20"
 log = "0.4"
 tokio = { version = "1", features = ["full"] }
 ffmpeg-next = { version = "6", features = ["default"] }
+ffmpeg-sys-next = { version = "6", features = ["default"] }
 sdl2 = "0.35"
+crossbeam = "0.8"
 
 [dependencies.windows-sys]
 features = ["Win32_System_Power"]
 version = "0.48"
+
+[build-dependencies]
+cc = "1"
 
 [profile.dev]
 overflow-checks = false

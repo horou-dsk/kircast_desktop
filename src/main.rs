@@ -10,6 +10,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> tokio::io::Result<()> {
     setup_log();
+
     let name = "RustAirplay";
 
     let airplay_config = AirPlayConfig {
