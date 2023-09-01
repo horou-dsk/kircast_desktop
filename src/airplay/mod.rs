@@ -1,3 +1,4 @@
+mod ffmpeg_audio;
 mod ffmpeg_sdl;
 
 use std::{cell::UnsafeCell, str::FromStr};
@@ -6,7 +7,7 @@ use airplay2_protocol::airplay::airplay_consumer::AirPlayConsumer;
 use airplay2_protocol::airplay::lib::audio_stream_info::CompressionType;
 use gst::Caps;
 use gstreamer::{self as gst, prelude::*};
-use gstreamer_app::{self as gst_app, AppSrc, AppStreamType};
+use gstreamer_app::{AppSrc, AppStreamType};
 use windows_sys::Win32::System::Power::{
     SetThreadExecutionState, ES_CONTINUOUS, ES_DISPLAY_REQUIRED,
 };
@@ -16,7 +17,6 @@ use self::ffmpeg_sdl::SdlFfmpeg;
 pub struct VideoConsumer {
     alac: (gst::Pipeline, AppSrc, gst::Element),
     aac_eld: (gst::Pipeline, AppSrc, gst::Element),
-    _h264: (gst::Pipeline, AppSrc),
     audio_compression_type: UnsafeCell<CompressionType>,
     ffmpeg: SdlFfmpeg,
 }
@@ -103,40 +103,9 @@ impl Default for VideoConsumer {
         ])
         .unwrap();
 
-        let h264pipeline = gst::parse_launch(
-            "appsrc name=h264-src ! h264parse ! avdec_h264 ! autovideosink sync=false",
-        )
-        .unwrap();
-
-        let h264pipeline = h264pipeline.dynamic_cast::<gst::Pipeline>().unwrap();
-
-        let mut h264_src = None;
-
-        for elem in h264pipeline.children() {
-            // println!("{}", elem.name());
-            if elem.name() == "h264-src" {
-                h264_src = Some(elem.dynamic_cast::<gst_app::AppSrc>().unwrap());
-                break;
-            }
-        }
-
-        let caps = gst::Caps::from_str(
-            "video/x-h264,colorimetry=bt709,stream-format=(string)byte-stream,alignment=(string)au",
-        )
-        .unwrap();
-
-        let h264_src = h264_src.unwrap();
-
-        h264_src.set_caps(Some(&caps));
-        h264_src.set_is_live(true);
-        h264_src.set_stream_type(gst_app::AppStreamType::Stream);
-        h264_src.set_format(gst::Format::Time);
-        h264_src.set_property("emit-signals", true);
-
         Self {
             alac: (alac_pipeline, alac_appsrc, alac_volume),
             aac_eld: (aac_eld_pipeline, aac_eld_appsrc, aac_eld_volume),
-            _h264: (h264pipeline, h264_src),
             audio_compression_type: CompressionType::Alac.into(),
             ffmpeg: SdlFfmpeg::new(1920, 1080),
         }
