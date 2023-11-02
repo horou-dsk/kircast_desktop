@@ -10,15 +10,13 @@ airplay2-protocol = { path = "../airplay-protocol" }
 anyhow = "1.0.71"
 chrono = "0.4"
 env_logger = "0.10"
-gstreamer = "0.20"
-gstreamer-app = "0.20"
 log = "0.4"
 tokio = { version = "1", features = ["full"] }
 ffmpeg-next = { version = "6", features = ["default"] }
 ffmpeg-sys-next = { version = "6", features = ["default"] }
 sdl2 = "0.35"
 crossbeam = "0.8"
-cpal = "0.15"
+cpal = { version = "0.15" }
 
 [dependencies.windows-sys]
 features = ["Win32_System_Power"]
