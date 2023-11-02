@@ -40,7 +40,7 @@ impl SdlFfmpeg {
                 .unwrap()
                 .video()
                 .unwrap();
-            let mut scaler = None;
+            let mut wscaler = None;
             while let Ok(frame) = rx.recv() {
                 match frame {
                     Frame::Pakcet(packet) => {
@@ -49,22 +49,18 @@ impl SdlFfmpeg {
                         } else {
                             let mut frame = ffmpeg::frame::Video::empty();
                             while decoder.receive_frame(&mut frame).is_ok() {
-                                let scaler = if let Some(s) = &mut scaler {
+                                let scaler = if let Some(s) = &mut wscaler {
                                     s
                                 } else {
-                                    scaler = Some(
-                                        ffmpeg::software::converter(
-                                            (frame.width(), frame.height()),
-                                            frame.format(),
-                                            Pixel::RGB24,
-                                        )
-                                        .unwrap(),
-                                    );
-                                    scaler.as_mut().unwrap()
+                                    wscaler = Some(frame.converter(Pixel::RGB24).unwrap());
+                                    wscaler.as_mut().unwrap()
                                 };
                                 let mut rgb_frame = ffmpeg::frame::Video::empty();
-                                scaler.run(&frame, &mut rgb_frame).unwrap();
-                                tx.send(rgb_frame).unwrap();
+                                if scaler.run(&frame, &mut rgb_frame).is_err() {
+                                    wscaler = Some(frame.converter(Pixel::RGB24).unwrap());
+                                } else {
+                                    tx.send(rgb_frame).unwrap();
+                                };
                             }
                         }
                     }

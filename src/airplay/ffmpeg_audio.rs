@@ -2,23 +2,23 @@ use std::cell::UnsafeCell;
 
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
-    Device, Sample, Stream, SupportedStreamConfig,
+    Device, Sample, SampleRate, Stream, SupportedStreamConfig,
 };
 use crossbeam::channel::{Receiver, Sender};
 use ffmpeg::{
     codec::{Id, Parameters},
     decoder::Audio,
-    format,
-    frame::audio::Audio as FrameAudio,
-    ChannelLayout, Packet,
+    format, ChannelLayout, Packet,
 };
 use ffmpeg_next::{self as ffmpeg};
-use sdl2::audio::{AudioCVT, AudioFormat};
 
-use crate::ffp::{ff_aac_par, ff_alac_par};
+use crate::{
+    audio::sample_rate::SampleRateConverter,
+    ffp::{ff_aac_par, ff_alac_par},
+};
 
 enum AudioFrame {
-    Audio(FrameAudio),
+    Audio(Packet),
     Volume(f32),
     End,
 }
@@ -93,7 +93,7 @@ impl Default for FfMpegAudio {
     fn default() -> Self {
         Self {
             decoder: None.into(),
-            audio_channel: crossbeam::channel::bounded(5),
+            audio_channel: crossbeam::channel::unbounded(),
         }
     }
 }
@@ -108,10 +108,7 @@ impl FfMpegAudio {
             unsafe { Parameters::wrap(ff_alac_par(extra_data.as_ptr(), extra_data.len()), None) };
         ctx.set_parameters(par)?;
         let decoder = ctx.open_as(codec)?.audio()?;
-        unsafe {
-            (*self.decoder.get()).replace(decoder);
-        }
-        self.play_audio();
+        self.play_audio(decoder);
         Ok(())
     }
 
@@ -123,11 +120,7 @@ impl FfMpegAudio {
         let mut ctx = ffmpeg::decoder::new();
         ctx.set_parameters(par)?;
         let decoder = ctx.open_as(codec)?.audio()?;
-
-        unsafe {
-            (*self.decoder.get()).replace(decoder);
-        }
-        self.play_audio();
+        self.play_audio(decoder);
         Ok(())
     }
 
@@ -138,38 +131,42 @@ impl FfMpegAudio {
         }
     }
 
-    fn play_audio(&self) {
+    fn play_audio(&self, mut decoder: Audio) {
         let rx = self.audio_channel.1.clone();
         std::thread::spawn(move || {
-            log::info!("创建 cpal");
             let audio_cpal = AudioCpal::default();
             let sample_rate = audio_cpal.config.sample_rate().0;
-            log::info!("创建成功了吗 ？？1 {} ", sample_rate);
-            let cvt = AudioCVT::new(
-                AudioFormat::U8,
-                2,
-                44100,
-                AudioFormat::U8,
-                audio_cpal.config.channels() as u8,
-                sample_rate as i32,
-            )
-            .expect("Could not create convert");
-            // log::info!("创建成功了吗 ？？");
             let mut volume = 0.5;
             if let Ok(_stream) = audio_cpal.play() {
                 let mut sample_convert = None;
-                while let Ok(audio) = rx.recv() {
-                    match audio {
-                        AudioFrame::Audio(audio) => {
+                while let Ok(audio_frame) = rx.recv() {
+                    match audio_frame {
+                        AudioFrame::Audio(packet) => {
+                            let audio = match decoder.send_packet(&packet) {
+                                Ok(_) => {
+                                    let mut audio = ffmpeg::frame::Audio::empty();
+                                    if decoder.receive_frame(&mut audio).is_ok() {
+                                        audio
+                                        // let convert_sample = cvt.convert(audio_convert_frame.data(0).to_vec());
+                                    } else {
+                                        continue;
+                                    }
+                                }
+                                Err(err) => {
+                                    log::error!("audio send packet error! {:?}", err);
+                                    continue;
+                                }
+                            };
+
                             let sample_convert = if let Some(sc) = &mut sample_convert {
                                 sc
                             } else {
                                 sample_convert = ffmpeg::software::resampler(
                                     (audio.format(), audio.channel_layout(), audio.rate()),
                                     (
-                                        format::Sample::U8(format::sample::Type::Packed),
+                                        format::Sample::I16(format::sample::Type::Packed),
                                         ChannelLayout::STEREO,
-                                        sample_rate,
+                                        audio.rate(),
                                     ),
                                 )
                                 .ok();
@@ -179,19 +176,22 @@ impl FfMpegAudio {
                             sample_convert
                                 .run(&audio, &mut audio_convert_frame)
                                 .unwrap();
-                            log::info!(
-                                "{:?} len = {}",
-                                audio_convert_frame.data(0),
-                                audio_convert_frame.data(0).len()
+                            let frame_data = audio_convert_frame.data(0);
+                            let mut pcm_samples = Vec::with_capacity(frame_data.len() / 2);
+                            for i in 0..frame_data.len() / 2 {
+                                let i = i * 2;
+                                pcm_samples
+                                    .push(i16::from_le_bytes([frame_data[i], frame_data[i + 1]]));
+                            }
+                            let convert = SampleRateConverter::new(
+                                pcm_samples.into_iter(),
+                                SampleRate(audio_convert_frame.rate()),
+                                SampleRate(sample_rate),
+                                2,
                             );
-                            let convert_sample = cvt.convert(audio_convert_frame.data(0).to_vec());
-                            log::info!("{:?} len = {}", convert_sample, convert_sample.len());
-                            let convert_sample = audio_convert_frame
-                                .data(0)
-                                .iter()
-                                .map(|sample| ((*sample as f32 / 127.5) - 1.0) * volume)
-                                .collect::<Vec<f32>>();
-                            audio_cpal.push_buffer(convert_sample).unwrap();
+                            let pcm_samples =
+                                convert.map(|v| f32::from_sample(v) * volume).collect();
+                            audio_cpal.push_buffer(pcm_samples).unwrap();
                         }
                         AudioFrame::End => {
                             break;
@@ -206,24 +206,9 @@ impl FfMpegAudio {
         });
     }
 
-    pub fn push_buffer(&self, buf: &[u8]) -> Result<(), ffmpeg::Error> {
+    pub fn push_buffer(&self, buf: &[u8]) -> anyhow::Result<()> {
         let packet = Packet::copy(buf);
-        if let Some(decoder) = unsafe { &mut *self.decoder.get() }.as_mut() {
-            match decoder.send_packet(&packet) {
-                Ok(_) => {
-                    let mut audio = ffmpeg::frame::Audio::empty();
-                    if decoder.receive_frame(&mut audio).is_ok() {
-                        if let Err(err) = self.audio_channel.0.send(AudioFrame::Audio(audio)) {
-                            log::error!("send audio frame error {:?}", err);
-                        }
-                        // let convert_sample = cvt.convert(audio_convert_frame.data(0).to_vec());
-                    }
-                }
-                Err(err) => {
-                    log::error!("audio send packet error! {:?}", err);
-                }
-            }
-        }
+        self.audio_channel.0.send(AudioFrame::Audio(packet))?;
         Ok(())
     }
 
