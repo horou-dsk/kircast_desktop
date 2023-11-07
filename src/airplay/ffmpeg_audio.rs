@@ -1,4 +1,4 @@
-use std::cell::UnsafeCell;
+use std::{cell::UnsafeCell, time::Duration};
 
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
@@ -208,7 +208,9 @@ impl FfMpegAudio {
 
     pub fn push_buffer(&self, buf: &[u8]) -> anyhow::Result<()> {
         let packet = Packet::copy(buf);
-        self.audio_channel.0.send(AudioFrame::Audio(packet))?;
+        self.audio_channel
+            .0
+            .send_timeout(AudioFrame::Audio(packet), Duration::from_secs(1))?;
         Ok(())
     }
 
