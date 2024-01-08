@@ -12,12 +12,14 @@ async fn main() -> tokio::io::Result<()> {
     setup_log();
 
     let name = "RustAirplay";
+    let volume = 0.5;
 
     let airplay_config = AirPlayConfig {
         server_name: name.to_string(),
         width: 1920,
         height: 1080,
         fps: 60,
+        volume,
     };
     let video_consumer: ArcAirPlayConsumer = Arc::new(VideoConsumer::default());
     let mserver = AirServer::bind_default(ControlHandle::new(
