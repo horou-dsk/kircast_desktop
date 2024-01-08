@@ -6,7 +6,7 @@ version = "0.1.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-airplay2-protocol = { path = "../airplay-protocol" }
+airplay2-protocol = { git = "https://github.com/horou-dsk/airplay-protocol.git" }
 anyhow = "1.0.71"
 chrono = "0.4"
 env_logger = "0.10"
