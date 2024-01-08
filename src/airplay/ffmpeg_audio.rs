@@ -62,8 +62,9 @@ impl AudioCpal {
                     }
                 }
                 if frame_buf.len() >= data.len() {
-                    let channel_buf: Vec<f32> = frame_buf.drain(..data.len()).collect();
-                    data.copy_from_slice(&channel_buf);
+                    frame_buf.drain(..data.len()).zip(data).for_each(|(f, t)| {
+                        *t = f;
+                    });
                 } else {
                     data.iter_mut().for_each(|v| *v = Sample::EQUILIBRIUM);
                     log::info!("cpal len min");
