@@ -42,7 +42,7 @@ impl Default for AudioCpal {
         Self {
             device,
             config,
-            channel: crossbeam::channel::bounded(5),
+            channel: crossbeam::channel::bounded(16),
         }
     }
 }
