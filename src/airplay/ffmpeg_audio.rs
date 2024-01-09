@@ -54,20 +54,17 @@ impl AudioCpal {
         let stream = self.device.build_output_stream(
             &self.config.config(),
             move |data: &mut [f32], _info| {
-                while frame_buf.len() < data.len() {
-                    if let Ok(buf) = rx.recv() {
-                        frame_buf.extend(&buf);
-                    } else {
-                        break;
-                    }
+                while let Ok(buf) = rx.try_recv() {
+                    frame_buf.extend(buf);
                 }
                 if frame_buf.len() >= data.len() {
                     frame_buf.drain(..data.len()).zip(data).for_each(|(f, t)| {
                         *t = f;
                     });
                 } else {
-                    data.iter_mut().for_each(|v| *v = Sample::EQUILIBRIUM);
-                    log::info!("cpal len min");
+                    let mut frame_buf = frame_buf.drain(..);
+                    data.iter_mut()
+                        .for_each(|v| *v = frame_buf.next().unwrap_or(Sample::EQUILIBRIUM));
                 }
             },
             |err| {
@@ -81,6 +78,8 @@ impl AudioCpal {
 
     pub fn push_buffer(&self, buf: Vec<f32>) -> anyhow::Result<()> {
         self.channel.0.send(buf)?;
+        // if buf.iter().any(|v| v != &0.0) {
+        // }
         Ok(())
     }
 }
