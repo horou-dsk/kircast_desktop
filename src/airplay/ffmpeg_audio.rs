@@ -1,4 +1,4 @@
-use std::{cell::UnsafeCell, time::Duration};
+use std::cell::UnsafeCell;
 
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
@@ -17,6 +17,8 @@ use crate::{
     ffp::{ff_aac_par, ff_alac_par},
 };
 
+type PcmSample = i16;
+
 enum AudioFrame {
     Audio(Packet),
     Volume(f32),
@@ -27,7 +29,7 @@ struct AudioCpal {
     // cvt: AudioCVT,
     device: Device,
     config: SupportedStreamConfig,
-    channel: (Sender<Vec<f32>>, Receiver<Vec<f32>>),
+    channel: (Sender<Vec<PcmSample>>, Receiver<Vec<PcmSample>>),
 }
 
 impl Default for AudioCpal {
@@ -42,21 +44,26 @@ impl Default for AudioCpal {
         Self {
             device,
             config,
-            channel: crossbeam::channel::bounded(128),
+            channel: crossbeam::channel::bounded(32),
         }
     }
 }
 
 impl AudioCpal {
     pub fn play(&self) -> anyhow::Result<Stream> {
-        let mut frame_buf: Vec<f32> = Vec::new();
+        let mut frame_buf: Vec<PcmSample> = Vec::new();
         let rx = self.channel.1.clone();
         let stream = self.device.build_output_stream(
             &self.config.config(),
-            move |data: &mut [f32], _info| {
+            move |data: &mut [PcmSample], _info| {
                 while let Ok(buf) = rx.try_recv() {
                     frame_buf.extend(buf);
                 }
+                // log::info!(
+                //     "frame_buf len = {} data len = {}",
+                //     frame_buf.len(),
+                //     data.len()
+                // );
                 if frame_buf.len() >= data.len() {
                     frame_buf.drain(..data.len()).zip(data).for_each(|(f, t)| {
                         *t = f;
@@ -76,8 +83,8 @@ impl AudioCpal {
         Ok(stream)
     }
 
-    pub fn push_buffer(&self, buf: Vec<f32>) -> anyhow::Result<()> {
-        if buf.iter().any(|v| v != &0.0) {
+    pub fn push_buffer(&self, buf: Vec<PcmSample>) -> anyhow::Result<()> {
+        if buf.iter().any(|v| v != &0) {
             self.channel.0.send(buf)?;
         }
         Ok(())
@@ -176,22 +183,19 @@ impl FfMpegAudio {
                             sample_convert
                                 .run(&audio, &mut audio_convert_frame)
                                 .unwrap();
-                            let frame_data = audio_convert_frame.data(0);
-                            let mut pcm_samples = Vec::with_capacity(frame_data.len() / 2);
-                            for i in 0..frame_data.len() / 2 {
-                                let i = i * 2;
-                                pcm_samples
-                                    .push(i16::from_le_bytes([frame_data[i], frame_data[i + 1]]));
-                            }
+                            let pcm_samples = audio_convert_frame.data(0).chunks(2).map(|buf| {
+                                (i16::from_le_bytes(buf.try_into().unwrap()) as f32 * volume) as i16
+                            });
                             let convert = SampleRateConverter::new(
-                                pcm_samples.into_iter(),
+                                pcm_samples,
                                 SampleRate(audio_convert_frame.rate()),
                                 SampleRate(sample_rate),
                                 2,
                             );
-                            let pcm_samples =
-                                convert.map(|v| f32::from_sample(v) * volume).collect();
-                            audio_cpal.push_buffer(pcm_samples).unwrap();
+                            // let pcm_samples = convert
+                            //     .map(|v| PcmSample::from_sample(v) * volume)
+                            //     .collect();
+                            audio_cpal.push_buffer(convert.collect()).unwrap();
                         }
                         AudioFrame::End => {
                             break;
@@ -208,9 +212,7 @@ impl FfMpegAudio {
 
     pub fn push_buffer(&self, buf: &[u8]) -> anyhow::Result<()> {
         let packet = Packet::copy(buf);
-        self.audio_channel
-            .0
-            .send_timeout(AudioFrame::Audio(packet), Duration::from_secs(1))?;
+        self.audio_channel.0.send(AudioFrame::Audio(packet))?;
         Ok(())
     }
 
