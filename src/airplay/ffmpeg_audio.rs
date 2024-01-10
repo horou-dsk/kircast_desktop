@@ -42,7 +42,7 @@ impl Default for AudioCpal {
         Self {
             device,
             config,
-            channel: crossbeam::channel::bounded(16),
+            channel: crossbeam::channel::bounded(128),
         }
     }
 }
@@ -77,9 +77,9 @@ impl AudioCpal {
     }
 
     pub fn push_buffer(&self, buf: Vec<f32>) -> anyhow::Result<()> {
-        self.channel.0.send(buf)?;
-        // if buf.iter().any(|v| v != &0.0) {
-        // }
+        if buf.iter().any(|v| v != &0.0) {
+            self.channel.0.send(buf)?;
+        }
         Ok(())
     }
 }
