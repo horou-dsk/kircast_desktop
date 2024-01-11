@@ -2,7 +2,7 @@ use std::cell::UnsafeCell;
 
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
-    Device, Sample, SampleRate, Stream, SupportedStreamConfig,
+    BufferSize, Device, Sample, SampleRate, Stream, SupportedStreamConfig,
 };
 use crossbeam::channel::{Receiver, Sender};
 use ffmpeg::{
@@ -44,35 +44,78 @@ impl Default for AudioCpal {
         Self {
             device,
             config,
-            channel: crossbeam::channel::bounded(32),
+            channel: crossbeam::channel::bounded(128),
         }
     }
 }
 
 impl AudioCpal {
     pub fn play(&self) -> anyhow::Result<Stream> {
-        let mut frame_buf: Vec<PcmSample> = Vec::new();
+        let mut pcm_buf = [0; 4096];
+        let mut pcm_len = 0;
+        let mut rem_buf = [0; 2048];
+        let mut rem_len = 0;
+        let mut rem_read_pos = 0;
         let rx = self.channel.1.clone();
+        let mut config = self.config.config();
+        config.buffer_size = BufferSize::Fixed(512);
         let stream = self.device.build_output_stream(
-            &self.config.config(),
+            &config,
             move |data: &mut [PcmSample], _info| {
-                while let Ok(buf) = rx.try_recv() {
-                    frame_buf.extend(buf);
+                if rem_len != 0 {
+                    let read_len = rem_len.min(data.len());
+                    pcm_buf[..read_len]
+                        .copy_from_slice(&rem_buf[rem_read_pos..rem_read_pos + read_len]);
+                    pcm_len += read_len;
+                    rem_len -= read_len;
+                    if rem_len != 0 {
+                        rem_read_pos += read_len;
+                    } else {
+                        rem_read_pos = 0;
+                    }
+                }
+                if pcm_len < data.len() {
+                    // TODO: 音频同步问题
+                    if rx.len() > 31 {
+                        let skip_len = rx.len() - 8;
+                        for _ in 0..skip_len {
+                            let _ = rx.try_recv();
+                        }
+                        log::info!("Audio packet skip {}", skip_len);
+                    }
+                    while let Ok(buf) = rx.try_recv() {
+                        if pcm_len + buf.len() > data.len() {
+                            let rl = data.len() - pcm_len;
+                            pcm_buf[pcm_len..data.len()].copy_from_slice(&buf[..rl]);
+                            let rem = &buf[rl..];
+                            rem_buf[..rem.len()].copy_from_slice(rem);
+                            rem_len = rem.len();
+                            pcm_len = data.len();
+                            break;
+                        } else {
+                            pcm_buf[pcm_len..pcm_len + buf.len()].copy_from_slice(&buf);
+                            pcm_len += buf.len();
+                        }
+                        if pcm_len >= data.len() {
+                            break;
+                        }
+                    }
                 }
                 // log::info!(
-                //     "frame_buf len = {} data len = {} info = {:?}",
-                //     frame_buf.len(),
+                //     "frame_buf len = {} data len = {} pcm_len = {} rem_len = {}",
+                //     rx.len(),
                 //     data.len(),
-                //     _info
+                //     pcm_len,
+                //     rem_len
                 // );
-                if frame_buf.len() >= data.len() {
-                    frame_buf.drain(..data.len()).zip(data).for_each(|(f, t)| {
-                        *t = f;
-                    });
+                if pcm_len >= data.len() {
+                    data.copy_from_slice(&pcm_buf[..data.len()]);
+                    pcm_len -= data.len();
                 } else {
-                    let mut frame_buf = frame_buf.drain(..);
+                    let mut buf = pcm_buf[..pcm_len].iter_mut();
                     data.iter_mut()
-                        .for_each(|v| *v = frame_buf.next().unwrap_or(Sample::EQUILIBRIUM));
+                        .for_each(|v| *v = buf.next().map(|v| *v).unwrap_or(Sample::EQUILIBRIUM));
+                    pcm_len = 0;
                 }
             },
             |err| {
@@ -85,7 +128,9 @@ impl AudioCpal {
     }
 
     pub fn push_buffer(&self, buf: Vec<PcmSample>) -> anyhow::Result<()> {
-        self.channel.0.send(buf)?;
+        if buf.iter().any(|v| v != &0) {
+            self.channel.0.send(buf)?;
+        }
         Ok(())
     }
 }
