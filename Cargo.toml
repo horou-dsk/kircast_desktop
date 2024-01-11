@@ -17,6 +17,7 @@ ffmpeg-sys-next = { version = "6", features = ["default"] }
 sdl2 = "0.35"
 crossbeam = "0.8"
 cpal = { version = "0.15" }
+dasp = { version = "0.11", features = ["signal", "ring_buffer", "interpolate-sinc", "interpolate"]}
 
 [dependencies.windows-sys]
 features = ["Win32_System_Power"]

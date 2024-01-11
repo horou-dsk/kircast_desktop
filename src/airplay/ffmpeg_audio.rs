@@ -60,9 +60,10 @@ impl AudioCpal {
                     frame_buf.extend(buf);
                 }
                 // log::info!(
-                //     "frame_buf len = {} data len = {}",
+                //     "frame_buf len = {} data len = {} info = {:?}",
                 //     frame_buf.len(),
-                //     data.len()
+                //     data.len(),
+                //     _info
                 // );
                 if frame_buf.len() >= data.len() {
                     frame_buf.drain(..data.len()).zip(data).for_each(|(f, t)| {
@@ -84,9 +85,7 @@ impl AudioCpal {
     }
 
     pub fn push_buffer(&self, buf: Vec<PcmSample>) -> anyhow::Result<()> {
-        if buf.iter().any(|v| v != &0) {
-            self.channel.0.send(buf)?;
-        }
+        self.channel.0.send(buf)?;
         Ok(())
     }
 }

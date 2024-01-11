@@ -1,3 +1,9 @@
+macro_rules! _p {
+    ($($tokens: tt)*) => {
+        println!("cargo:warning={}", format!($($tokens)*))
+    }
+}
+
 #[cfg(not(target_env = "msvc"))]
 fn try_vcpkg(_statik: bool) -> Option<Vec<PathBuf>> {
     None
@@ -18,6 +24,8 @@ fn try_vcpkg(statik: bool) -> Option<Vec<std::path::PathBuf>> {
 }
 
 fn main() {
+    // _p!("{:?}", std::env::var("CPAL_ASIO_DIR"));
+    // _p!("{:?}", std::env::var("OUT_DIR"));
     let ffmpeg_libs = ["libavformat", "libavfilter", "libswscale", "libswresample"];
     let include_paths = if let Some(include_paths) = try_vcpkg(false) {
         include_paths
