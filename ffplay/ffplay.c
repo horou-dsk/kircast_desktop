@@ -10,7 +10,7 @@ AVCodecParameters *ff_alac_par(uint8_t *data, size_t data_size)
   memcpy(hdata, data, data_size);
   par->extradata = hdata;
   par->extradata_size = data_size;
-  par->sample_rate = 48000;
+  par->sample_rate = 44100;
   return par;
 }
 

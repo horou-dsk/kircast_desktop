@@ -76,14 +76,14 @@ impl AudioCpal {
                 }
                 if pcm_len < data.len() {
                     // TODO: 音频同步问题
-                    if rx.len() > 31 {
-                        let skip_len = rx.len() - 8;
-                        for _ in 0..skip_len {
-                            let _ = rx.try_recv();
-                        }
-                        log::info!("Audio packet skip {}", skip_len);
-                    }
-                    while let Ok(buf) = rx.try_recv() {
+                    // if rx.len() > 48 {
+                    //     let skip_len = rx.len() - 24;
+                    //     for _ in 0..skip_len {
+                    //         let _ = rx.try_recv();
+                    //     }
+                    //     log::info!("Audio packet skip {}", skip_len);
+                    // }
+                    while let Ok(buf) = rx.recv() {
                         if pcm_len + buf.len() > data.len() {
                             let rl = data.len() - pcm_len;
                             pcm_buf[pcm_len..data.len()].copy_from_slice(&buf[..rl]);
@@ -101,13 +101,7 @@ impl AudioCpal {
                         }
                     }
                 }
-                // log::info!(
-                //     "frame_buf len = {} data len = {} pcm_len = {} rem_len = {}",
-                //     rx.len(),
-                //     data.len(),
-                //     pcm_len,
-                //     rem_len
-                // );
+                log::info!("rx_buf len = {}", rx.len());
                 if pcm_len >= data.len() {
                     data.copy_from_slice(&pcm_buf[..data.len()]);
                     pcm_len -= data.len();
@@ -116,6 +110,7 @@ impl AudioCpal {
                     data.iter_mut()
                         .for_each(|v| *v = buf.next().map(|v| *v).unwrap_or(Sample::EQUILIBRIUM));
                     pcm_len = 0;
+                    log::info!("cpal len min");
                 }
             },
             |err| {
@@ -128,10 +123,15 @@ impl AudioCpal {
     }
 
     pub fn push_buffer(&self, buf: Vec<PcmSample>) -> anyhow::Result<()> {
-        if buf.iter().any(|v| v != &0) {
-            self.channel.0.send(buf)?;
-        }
+        // if buf.iter().any(|v| v != &0) {
+        self.channel.0.send(buf)?;
+        // }
         Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub fn buffer_len(&self) -> usize {
+        self.channel.1.len()
     }
 }
 
@@ -189,18 +189,21 @@ impl FfMpegAudio {
             let sample_rate = audio_cpal.config.sample_rate().0;
             let mut volume = 0.5;
             if let Ok(_stream) = audio_cpal.play() {
-                let mut sample_convert = None;
+                // let mut sample_convert = None;
+                let mut audio = ffmpeg::frame::Audio::empty();
+                let mut audio_convert_frame = ffmpeg::frame::Audio::empty();
+                let mut pcm_buffer = [0i16; 4096];
+                let mut pcm_buffer_len;
+                let mut now = std::time::Instant::now();
+                let mut secs_len = 0;
                 while let Ok(audio_frame) = rx.recv() {
                     match audio_frame {
                         AudioFrame::Audio(packet) => {
-                            let audio = match decoder.send_packet(&packet) {
+                            match decoder.send_packet(&packet) {
                                 Ok(_) => {
-                                    let mut audio = ffmpeg::frame::Audio::empty();
-                                    if decoder.receive_frame(&mut audio).is_ok() {
-                                        audio
-                                        // let convert_sample = cvt.convert(audio_convert_frame.data(0).to_vec());
-                                    } else {
+                                    if decoder.receive_frame(&mut audio).is_err() {
                                         continue;
+                                        // let convert_sample = cvt.convert(audio_convert_frame.data(0).to_vec());
                                     }
                                 }
                                 Err(err) => {
@@ -208,38 +211,85 @@ impl FfMpegAudio {
                                     continue;
                                 }
                             };
-
-                            let sample_convert = if let Some(sc) = &mut sample_convert {
-                                sc
-                            } else {
-                                sample_convert = ffmpeg::software::resampler(
-                                    (audio.format(), audio.channel_layout(), audio.rate()),
-                                    (
-                                        format::Sample::I16(format::sample::Type::Packed),
-                                        ChannelLayout::STEREO,
-                                        audio.rate(),
-                                    ),
-                                )
-                                .ok();
-                                sample_convert.as_mut().unwrap()
+                            let pcm_samples: Vec<i16> = match audio.format() {
+                                format::Sample::I16(format::sample::Type::Planar) => {
+                                    let channel1 = audio.plane::<i16>(0);
+                                    let channel2 = audio.plane::<i16>(1);
+                                    secs_len += channel1.len();
+                                    if now.elapsed() >= std::time::Duration::from_secs(1) {
+                                        log::info!("len = {:?} rate = {}", secs_len, audio.rate());
+                                        now = std::time::Instant::now();
+                                        secs_len = 0;
+                                    }
+                                    pcm_buffer_len = 0;
+                                    channel1.iter().zip(channel2).for_each(|(a, b)| {
+                                        let a = (*a as f32 * volume) as i16;
+                                        let b = (*b as f32 * volume) as i16;
+                                        pcm_buffer[pcm_buffer_len..pcm_buffer_len + 2]
+                                            .copy_from_slice(&[a, b]);
+                                        pcm_buffer_len += 2;
+                                    });
+                                    let pcm_samples = &pcm_buffer[..pcm_buffer_len];
+                                    let convert = SampleRateConverter::new(
+                                        pcm_samples.iter().copied(),
+                                        SampleRate(audio.rate()),
+                                        SampleRate(sample_rate),
+                                        2,
+                                    );
+                                    convert.collect()
+                                }
+                                _ => {
+                                    let mut sample_convert = audio
+                                        .resampler(
+                                            format::Sample::I16(format::sample::Type::Packed),
+                                            ChannelLayout::STEREO,
+                                            audio.rate(),
+                                        )
+                                        .unwrap();
+                                    sample_convert
+                                        .run(&audio, &mut audio_convert_frame)
+                                        .unwrap();
+                                    let pcm_samples =
+                                        audio_convert_frame.data(0).chunks(2).map(|buf| {
+                                            (i16::from_le_bytes(buf.try_into().unwrap()) as f32
+                                                * volume)
+                                                as i16
+                                        });
+                                    let convert = SampleRateConverter::new(
+                                        pcm_samples,
+                                        SampleRate(audio.rate()),
+                                        SampleRate(sample_rate),
+                                        2,
+                                    );
+                                    convert.collect()
+                                }
                             };
-                            let mut audio_convert_frame = ffmpeg::frame::Audio::empty();
-                            sample_convert
-                                .run(&audio, &mut audio_convert_frame)
-                                .unwrap();
-                            let pcm_samples = audio_convert_frame.data(0).chunks(2).map(|buf| {
-                                (i16::from_le_bytes(buf.try_into().unwrap()) as f32 * volume) as i16
-                            });
-                            let convert = SampleRateConverter::new(
-                                pcm_samples,
-                                SampleRate(audio_convert_frame.rate()),
-                                SampleRate(sample_rate),
-                                2,
-                            );
+
+                            // let sample_convert = if let Some(sc) = &mut sample_convert {
+                            //     sc
+                            // } else {
+                            //     sample_convert = audio
+                            //         .resampler(
+                            //             format::Sample::I16(format::sample::Type::Packed),
+                            //             ChannelLayout::STEREO,
+                            //             audio.rate(),
+                            //         )
+                            //         .ok();
+                            //     // sample_convert = ffmpeg::software::resampler(
+                            //     //     (audio.format(), audio.channel_layout(), audio.rate()),
+                            //     //     (
+                            //     //         format::Sample::I16(format::sample::Type::Packed),
+                            //     //         ChannelLayout::STEREO,
+                            //     //         audio.rate(),
+                            //     //     ),
+                            //     // )
+                            //     // .ok();
+                            //     sample_convert.as_mut().unwrap()
+                            // };
                             // let pcm_samples = convert
                             //     .map(|v| PcmSample::from_sample(v) * volume)
                             //     .collect();
-                            audio_cpal.push_buffer(convert.collect()).unwrap();
+                            audio_cpal.push_buffer(pcm_samples).unwrap();
                         }
                         AudioFrame::End => {
                             break;
