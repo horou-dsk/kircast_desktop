@@ -1,5 +1,4 @@
-use std::cell::UnsafeCell;
-
+use airplay2_protocol::airplay::server::AudioPacket;
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     BufferSize, Device, Sample, SampleRate, Stream, SupportedStreamConfig,
@@ -11,6 +10,7 @@ use ffmpeg::{
     format, ChannelLayout, Packet,
 };
 use ffmpeg_next::{self as ffmpeg};
+use std::{cell::UnsafeCell, sync::atomic::AtomicU64};
 
 use crate::{
     audio::sample_rate::SampleRateConverter,
@@ -20,7 +20,7 @@ use crate::{
 type PcmSample = i16;
 
 enum AudioFrame {
-    Audio(Packet),
+    Audio(Packet, u32),
     Volume(f32),
     End,
 }
@@ -74,16 +74,10 @@ impl AudioCpal {
                         rem_read_pos = 0;
                     }
                 }
+                // log::info!("rx_buf len = {}", rx.len());
                 if pcm_len < data.len() {
                     // TODO: 音频同步问题
-                    // if rx.len() > 48 {
-                    //     let skip_len = rx.len() - 24;
-                    //     for _ in 0..skip_len {
-                    //         let _ = rx.try_recv();
-                    //     }
-                    //     log::info!("Audio packet skip {}", skip_len);
-                    // }
-                    while let Ok(buf) = rx.recv() {
+                    while let Ok(buf) = rx.try_recv() {
                         if pcm_len + buf.len() > data.len() {
                             let rl = data.len() - pcm_len;
                             pcm_buf[pcm_len..data.len()].copy_from_slice(&buf[..rl]);
@@ -101,7 +95,6 @@ impl AudioCpal {
                         }
                     }
                 }
-                log::info!("rx_buf len = {}", rx.len());
                 if pcm_len >= data.len() {
                     data.copy_from_slice(&pcm_buf[..data.len()]);
                     pcm_len -= data.len();
@@ -123,9 +116,7 @@ impl AudioCpal {
     }
 
     pub fn push_buffer(&self, buf: Vec<PcmSample>) -> anyhow::Result<()> {
-        // if buf.iter().any(|v| v != &0) {
         self.channel.0.send(buf)?;
-        // }
         Ok(())
     }
 
@@ -138,11 +129,13 @@ impl AudioCpal {
 pub(super) struct FfMpegAudio {
     decoder: UnsafeCell<Option<Audio>>,
     audio_channel: (Sender<AudioFrame>, Receiver<AudioFrame>),
+    samples_per_frame: AtomicU64,
 }
 
 impl Default for FfMpegAudio {
     fn default() -> Self {
         Self {
+            samples_per_frame: 0.into(),
             decoder: None.into(),
             audio_channel: crossbeam::channel::unbounded(),
         }
@@ -150,6 +143,11 @@ impl Default for FfMpegAudio {
 }
 
 impl FfMpegAudio {
+    pub fn set_samples_per_frame(&self, samples_per_frame: u64) {
+        self.samples_per_frame
+            .store(samples_per_frame, std::sync::atomic::Ordering::Relaxed);
+    }
+
     pub fn start_alac(&self) -> anyhow::Result<()> {
         let codec = ffmpeg::codec::decoder::find(Id::ALAC).unwrap();
         let mut ctx = ffmpeg::decoder::new();
@@ -184,21 +182,28 @@ impl FfMpegAudio {
 
     fn play_audio(&self, mut decoder: Audio) {
         let rx = self.audio_channel.1.clone();
+        let samples_per_frame = self
+            .samples_per_frame
+            .load(std::sync::atomic::Ordering::Relaxed) as usize;
+        let (max_len, _min_len) = if decoder.codec().unwrap().id() == Id::ALAC {
+            (15000 / samples_per_frame, 6000 / samples_per_frame)
+        } else {
+            (8000 / samples_per_frame, 3000 / samples_per_frame)
+        };
         std::thread::spawn(move || {
             let audio_cpal = AudioCpal::default();
             let sample_rate = audio_cpal.config.sample_rate().0;
             let mut volume = 0.5;
             if let Ok(_stream) = audio_cpal.play() {
                 // let mut sample_convert = None;
-                let mut audio = ffmpeg::frame::Audio::empty();
                 let mut audio_convert_frame = ffmpeg::frame::Audio::empty();
                 let mut pcm_buffer = [0i16; 4096];
                 let mut pcm_buffer_len;
-                let mut now = std::time::Instant::now();
-                let mut secs_len = 0;
+                let mut rate = 44100;
                 while let Ok(audio_frame) = rx.recv() {
                     match audio_frame {
-                        AudioFrame::Audio(packet) => {
+                        AudioFrame::Audio(packet, pts) => {
+                            let mut audio = ffmpeg::frame::Audio::empty();
                             match decoder.send_packet(&packet) {
                                 Ok(_) => {
                                     if decoder.receive_frame(&mut audio).is_err() {
@@ -211,16 +216,19 @@ impl FfMpegAudio {
                                     continue;
                                 }
                             };
+                            audio.set_pts(Some(pts as i64));
+                            let buffer_len = audio_cpal.buffer_len();
+                            if buffer_len > max_len && rate < 44704 {
+                                rate += 2;
+                            } else if rate > 44100 {
+                                rate -= 2;
+                            }
+                            // log::info!("切换 {}", rate);
+                            audio.set_rate(rate);
                             let pcm_samples: Vec<i16> = match audio.format() {
                                 format::Sample::I16(format::sample::Type::Planar) => {
                                     let channel1 = audio.plane::<i16>(0);
                                     let channel2 = audio.plane::<i16>(1);
-                                    secs_len += channel1.len();
-                                    if now.elapsed() >= std::time::Duration::from_secs(1) {
-                                        log::info!("len = {:?} rate = {}", secs_len, audio.rate());
-                                        now = std::time::Instant::now();
-                                        secs_len = 0;
-                                    }
                                     pcm_buffer_len = 0;
                                     channel1.iter().zip(channel2).for_each(|(a, b)| {
                                         let a = (*a as f32 * volume) as i16;
@@ -304,9 +312,11 @@ impl FfMpegAudio {
         });
     }
 
-    pub fn push_buffer(&self, buf: &[u8]) -> anyhow::Result<()> {
-        let packet = Packet::copy(buf);
-        self.audio_channel.0.send(AudioFrame::Audio(packet))?;
+    pub fn push_buffer(&self, buf: &AudioPacket) -> anyhow::Result<()> {
+        let packet = Packet::copy(buf.audio_buf());
+        self.audio_channel
+            .0
+            .send(AudioFrame::Audio(packet, buf.timestamp()))?;
         Ok(())
     }
 

@@ -5,6 +5,7 @@ use std::cell::UnsafeCell;
 
 use airplay2_protocol::airplay::airplay_consumer::AirPlayConsumer;
 use airplay2_protocol::airplay::lib::audio_stream_info::CompressionType;
+use airplay2_protocol::airplay::server::AudioPacket;
 use windows_sys::Win32::System::Power::{
     SetThreadExecutionState, ES_CONTINUOUS, ES_DISPLAY_REQUIRED,
 };
@@ -81,6 +82,8 @@ impl AirPlayConsumer for VideoConsumer {
         audio_stream_info: airplay2_protocol::airplay::lib::audio_stream_info::AudioStreamInfo,
     ) {
         log::info!("audio_stream_info... = {:#?}", audio_stream_info);
+        self.ffmpeg_audio
+            .set_samples_per_frame(audio_stream_info.samples_per_frame);
         let result = match audio_stream_info.compression_type {
             CompressionType::Alac => self.ffmpeg_audio.start_alac(),
             _ => self.ffmpeg_audio.start_aac(),
@@ -91,7 +94,7 @@ impl AirPlayConsumer for VideoConsumer {
         }
     }
 
-    fn on_audio(&self, bytes: &[u8]) {
+    fn on_audio(&self, bytes: &AudioPacket) {
         if let Err(err) = self.ffmpeg_audio.push_buffer(bytes) {
             log::error!("ffmpeg_audio push_buffer error {err:?}");
         }
