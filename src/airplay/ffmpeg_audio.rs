@@ -193,17 +193,18 @@ impl FfMpegAudio {
         std::thread::spawn(move || {
             let audio_cpal = AudioCpal::default();
             let sample_rate = audio_cpal.config.sample_rate().0;
+            let channels = audio_cpal.config.channels() as u32;
             let mut volume = 0.5;
             if let Ok(_stream) = audio_cpal.play() {
-                // let mut sample_convert = None;
+                let mut sample_convert = None;
+                let mut audio = ffmpeg::frame::Audio::empty();
                 let mut audio_convert_frame = ffmpeg::frame::Audio::empty();
-                let mut pcm_buffer = [0i16; 4096];
-                let mut pcm_buffer_len;
+                // let mut pcm_buffer = [0i16; 4096];
+                // let mut pcm_buffer_len;
                 let mut rate = 44100;
                 while let Ok(audio_frame) = rx.recv() {
                     match audio_frame {
                         AudioFrame::Audio(packet, pts) => {
-                            let mut audio = ffmpeg::frame::Audio::empty();
                             match decoder.send_packet(&packet) {
                                 Ok(_) => {
                                     if decoder.receive_frame(&mut audio).is_err() {
@@ -216,14 +217,13 @@ impl FfMpegAudio {
                                     continue;
                                 }
                             };
-                            audio.set_pts(Some(pts as i64));
+                            /* audio.set_pts(Some(pts as i64));
                             let buffer_len = audio_cpal.buffer_len();
                             if buffer_len > max_len && rate < 44704 {
                                 rate += 2;
                             } else if rate > 44100 {
                                 rate -= 2;
                             }
-                            // log::info!("切换 {}", rate);
                             audio.set_rate(rate);
                             let pcm_samples: Vec<i16> = match audio.format() {
                                 format::Sample::I16(format::sample::Type::Planar) => {
@@ -271,33 +271,42 @@ impl FfMpegAudio {
                                     );
                                     convert.collect()
                                 }
-                            };
+                            }; */
 
-                            // let sample_convert = if let Some(sc) = &mut sample_convert {
-                            //     sc
-                            // } else {
-                            //     sample_convert = audio
-                            //         .resampler(
-                            //             format::Sample::I16(format::sample::Type::Packed),
-                            //             ChannelLayout::STEREO,
-                            //             audio.rate(),
-                            //         )
-                            //         .ok();
-                            //     // sample_convert = ffmpeg::software::resampler(
-                            //     //     (audio.format(), audio.channel_layout(), audio.rate()),
-                            //     //     (
-                            //     //         format::Sample::I16(format::sample::Type::Packed),
-                            //     //         ChannelLayout::STEREO,
-                            //     //         audio.rate(),
-                            //     //     ),
-                            //     // )
-                            //     // .ok();
-                            //     sample_convert.as_mut().unwrap()
-                            // };
-                            // let pcm_samples = convert
-                            //     .map(|v| PcmSample::from_sample(v) * volume)
-                            //     .collect();
-                            audio_cpal.push_buffer(pcm_samples).unwrap();
+                            let sample_convert = if let Some(sc) = &mut sample_convert {
+                                sc
+                            } else {
+                                sample_convert = audio
+                                    .resampler(
+                                        format::Sample::I16(format::sample::Type::Packed),
+                                        ChannelLayout::STEREO,
+                                        audio.rate(),
+                                    )
+                                    .ok();
+                                sample_convert.as_mut().unwrap()
+                            };
+                            sample_convert
+                                .run(&audio, &mut audio_convert_frame)
+                                .unwrap();
+                            audio_convert_frame.set_pts(Some(pts as i64));
+                            let buffer_len = audio_cpal.buffer_len();
+                            if buffer_len > max_len && rate < 44704 {
+                                rate += channels;
+                            } else if rate > 44100 {
+                                rate -= channels;
+                            }
+                            audio_convert_frame.set_rate(rate);
+                            let pcm_samples = audio_convert_frame.data(0).chunks(2).map(|buf| {
+                                (PcmSample::from_le_bytes(buf.try_into().unwrap()) as f32 * volume)
+                                    as PcmSample
+                            });
+                            let convert = SampleRateConverter::new(
+                                pcm_samples,
+                                SampleRate(audio_convert_frame.rate()),
+                                SampleRate(sample_rate),
+                                channels as u16,
+                            );
+                            audio_cpal.push_buffer(convert.collect()).unwrap();
                         }
                         AudioFrame::End => {
                             break;
