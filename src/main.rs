@@ -20,6 +20,7 @@ async fn main() -> tokio::io::Result<()> {
         height: 1080,
         fps: 60,
         volume,
+        audio_buffer_size: Some(24),
     };
     let video_consumer: ArcAirPlayConsumer = Arc::new(VideoConsumer::default());
     let mserver = AirServer::bind_default(ControlHandle::new(

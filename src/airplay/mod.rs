@@ -94,8 +94,8 @@ impl AirPlayConsumer for VideoConsumer {
         }
     }
 
-    fn on_audio(&self, bytes: &AudioPacket) {
-        if let Err(err) = self.ffmpeg_audio.push_buffer(bytes) {
+    fn on_audio(&self, packet: &AudioPacket) {
+        if let Err(err) = self.ffmpeg_audio.push_buffer(packet) {
             log::error!("ffmpeg_audio push_buffer error {err:?}");
         }
     }

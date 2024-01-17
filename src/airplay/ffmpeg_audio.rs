@@ -99,9 +99,9 @@ impl AudioCpal {
                     data.copy_from_slice(&pcm_buf[..data.len()]);
                     pcm_len -= data.len();
                 } else {
-                    let mut buf = pcm_buf[..pcm_len].iter_mut();
+                    let mut buf = pcm_buf[..pcm_len].iter().copied();
                     data.iter_mut()
-                        .for_each(|v| *v = buf.next().map(|v| *v).unwrap_or(Sample::EQUILIBRIUM));
+                        .for_each(|v| *v = buf.next().unwrap_or(Sample::EQUILIBRIUM));
                     pcm_len = 0;
                     log::info!("cpal len min");
                 }
@@ -292,7 +292,9 @@ impl FfMpegAudio {
                             let buffer_len = audio_cpal.buffer_len();
                             if buffer_len > max_len && rate < 44704 {
                                 rate += channels;
+                                // log::info!("采样率提高 {}", rate);
                             } else if rate > 44100 {
+                                // log::info!("采样率降低 {}", rate);
                                 rate -= channels;
                             }
                             audio_convert_frame.set_rate(rate);
