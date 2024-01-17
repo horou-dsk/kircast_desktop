@@ -76,7 +76,6 @@ impl AudioCpal {
                 }
                 // log::info!("rx_buf len = {}", rx.len());
                 if pcm_len < data.len() {
-                    // TODO: 音频同步问题
                     while let Ok(buf) = rx.try_recv() {
                         if pcm_len + buf.len() > data.len() {
                             let rl = data.len() - pcm_len;
@@ -294,8 +293,8 @@ impl FfMpegAudio {
                                 rate += channels;
                                 // log::info!("采样率提高 {}", rate);
                             } else if rate > 44100 {
-                                // log::info!("采样率降低 {}", rate);
                                 rate -= channels;
+                                // log::info!("采样率降低 {}", rate);
                             }
                             audio_convert_frame.set_rate(rate);
                             let pcm_samples = audio_convert_frame.data(0).chunks(2).map(|buf| {
