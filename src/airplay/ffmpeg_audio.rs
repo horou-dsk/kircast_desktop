@@ -339,7 +339,8 @@ impl FfMpegAudio {
 fn hex_to_buf(hex: &str) -> Vec<u8> {
     let mut extra_data = Vec::with_capacity(hex.len() / 2);
     for i in 0..hex.len() / 2 {
-        let item = &hex[i * 2..i * 2 + 2];
+        let i = i * 2;
+        let item = &hex[i..i + 2];
         extra_data.push(u8::from_str_radix(item, 16).unwrap());
     }
     extra_data

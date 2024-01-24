@@ -64,7 +64,7 @@ dependencies = [
 [[package]]
 name = "airplay2-protocol"
 version = "0.1.0"
-source = "git+https://github.com/horou-dsk/airplay-protocol.git#7aeefb55863bb3e9db1a6d2506b63b438f82df78"
+source = "git+https://github.com/horou-dsk/airplay-protocol.git#a78e4f5d929b99b2c308cbf8f0a70d49b6ca8d72"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -1155,7 +1155,7 @@ dependencies = [
 [[package]]
 name = "libmdns"
 version = "0.7.5"
-source = "git+https://github.com/horou-dsk/airplay-protocol.git#7aeefb55863bb3e9db1a6d2506b63b438f82df78"
+source = "git+https://github.com/horou-dsk/airplay-protocol.git#a78e4f5d929b99b2c308cbf8f0a70d49b6ca8d72"
 dependencies = [
  "byteorder",
  "futures-util",
@@ -2077,7 +2077,7 @@ dependencies = [
 [[package]]
 name = "tp_macro"
 version = "0.1.0"
-source = "git+https://github.com/horou-dsk/airplay-protocol.git#7aeefb55863bb3e9db1a6d2506b63b438f82df78"
+source = "git+https://github.com/horou-dsk/airplay-protocol.git#a78e4f5d929b99b2c308cbf8f0a70d49b6ca8d72"
 dependencies = [
  "proc-macro2",
  "quote",
