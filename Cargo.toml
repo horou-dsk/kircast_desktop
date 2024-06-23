@@ -9,8 +9,6 @@ version = "0.1.0"
 airplay2-protocol = { git = "https://github.com/horou-dsk/airplay-protocol.git" }
 anyhow = "1.0.71"
 chrono = "0.4"
-env_logger = "0.10"
-log = "0.4"
 tokio = { version = "1", features = ["full"] }
 ffmpeg-next = { version = "6", features = ["default"] }
 ffmpeg-sys-next = { version = "6", features = ["default"] }
@@ -23,6 +21,12 @@ dasp = { version = "0.11", features = [
   "interpolate-sinc",
   "interpolate",
 ] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+tracing-appender = "0.2"
+log-panics = { version = "2", features = ["with-backtrace"] }
+smallvec = "1.13"
+ringbuf = "0.4.1"
 
 [dependencies.windows-sys]
 features = ["Win32_System_Power"]

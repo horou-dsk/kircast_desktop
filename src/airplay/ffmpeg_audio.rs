@@ -74,7 +74,7 @@ impl AudioCpal {
                         rem_read_pos = 0;
                     }
                 }
-                // log::info!("rx_buf len = {}", rx.len());
+                // tracing::info!("rx_buf len = {}", rx.len());
                 if pcm_len < data.len() {
                     while let Ok(buf) = rx.try_recv() {
                         if pcm_len + buf.len() > data.len() {
@@ -98,15 +98,17 @@ impl AudioCpal {
                     data.copy_from_slice(&pcm_buf[..data.len()]);
                     pcm_len -= data.len();
                 } else {
-                    let mut buf = pcm_buf[..pcm_len].iter().copied();
-                    data.iter_mut()
-                        .for_each(|v| *v = buf.next().unwrap_or(Sample::EQUILIBRIUM));
+                    data[..pcm_len].copy_from_slice(&pcm_buf[..pcm_len]);
+                    data[pcm_len..].fill(Sample::EQUILIBRIUM);
+                    // let mut buf = pcm_buf[..pcm_len].iter().copied();
+                    // data.iter_mut()
+                    //     .for_each(|v| *v = buf.next().unwrap_or(Sample::EQUILIBRIUM));
                     pcm_len = 0;
-                    log::info!("cpal len min");
+                    tracing::info!("cpal len min");
                 }
             },
             |err| {
-                log::error!("stream error {err:?}");
+                tracing::error!("stream error {err:?}");
             },
             None,
         )?;
@@ -119,7 +121,7 @@ impl AudioCpal {
         Ok(())
     }
 
-    #[allow(dead_code)]
+    #[inline]
     pub fn buffer_len(&self) -> usize {
         self.channel.1.len()
     }
@@ -212,7 +214,7 @@ impl FfMpegAudio {
                                     }
                                 }
                                 Err(err) => {
-                                    log::error!("audio send packet error! {:?}", err);
+                                    tracing::error!("audio send packet error! {:?}", err);
                                     continue;
                                 }
                             };
@@ -291,10 +293,10 @@ impl FfMpegAudio {
                             let buffer_len = audio_cpal.buffer_len();
                             if buffer_len > max_len && rate < 44704 {
                                 rate += channels;
-                                // log::info!("采样率提高 {}", rate);
+                                // tracing::info!("采样率提高 {}", rate);
                             } else if rate > 44100 {
                                 rate -= channels;
-                                // log::info!("采样率降低 {}", rate);
+                                // tracing::info!("采样率降低 {}", rate);
                             }
                             audio_convert_frame.set_rate(rate);
                             let pcm_samples = audio_convert_frame.data(0).chunks(2).map(|buf| {
@@ -318,7 +320,7 @@ impl FfMpegAudio {
                     }
                 }
             }
-            log::info!("Stop Cpal Audio...");
+            tracing::info!("Stop Cpal Audio...");
         });
     }
 

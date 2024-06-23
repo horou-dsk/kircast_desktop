@@ -34,7 +34,7 @@ impl Default for VideoConsumer {
 impl AirPlayConsumer for VideoConsumer {
     fn on_video(&self, bytes: &[u8]) {
         if let Err(err) = self.ffmpeg.push_buffer(bytes) {
-            log::error!("ffmpeg push_buffer error! {:?}", err);
+            tracing::error!("ffmpeg push_buffer error! {:?}", err);
         }
     }
 
@@ -48,14 +48,14 @@ impl AirPlayConsumer for VideoConsumer {
             }
         }
         self.ffmpeg.start().expect("ffmpeg start error");
-        log::info!(
+        tracing::info!(
             "OnVideo Format... {:?}",
             video_stream_info.get_stream_connection_id()
         );
     }
 
     fn on_video_src_disconnect(&self) {
-        log::info!("OnVideo Disconnect...");
+        tracing::info!("OnVideo Disconnect...");
         if cfg!(windows) {
             unsafe {
                 SetThreadExecutionState(ES_CONTINUOUS);
@@ -68,7 +68,7 @@ impl AirPlayConsumer for VideoConsumer {
         &self,
         audio_stream_info: airplay2_protocol::airplay::lib::audio_stream_info::AudioStreamInfo,
     ) {
-        log::info!("audio_stream_info... = {:#?}", audio_stream_info);
+        tracing::info!("audio_stream_info... = {:#?}", audio_stream_info);
         self.ffmpeg_audio
             .set_samples_per_frame(audio_stream_info.samples_per_frame);
         let result = match audio_stream_info.compression_type {
@@ -77,25 +77,25 @@ impl AirPlayConsumer for VideoConsumer {
         };
         unsafe { *self.audio_compression_type.get() = audio_stream_info.compression_type };
         if let Err(err) = result {
-            log::error!("start audio error {err:?}");
+            tracing::error!("start audio error {err:?}");
         }
     }
 
     fn on_audio(&self, packet: &AudioPacket) {
         if let Err(err) = self.ffmpeg_audio.push_buffer(packet) {
-            log::error!("ffmpeg_audio push_buffer error {err:?}");
+            tracing::error!("ffmpeg_audio push_buffer error {err:?}");
         }
     }
 
     fn on_audio_src_disconnect(&self) {
-        log::info!("OnAudio Disconnect...");
+        tracing::info!("OnAudio Disconnect...");
         self.ffmpeg_audio.stop();
     }
 
     fn on_volume(&self, volume: f32) {
         let volume = volume / 30.0 + 1.0;
         if let Err(err) = self.ffmpeg_audio.set_volume(volume) {
-            log::error!("set volume error {err:?}");
+            tracing::error!("set volume error {err:?}");
         }
     }
 }

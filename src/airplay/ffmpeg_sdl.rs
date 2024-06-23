@@ -45,7 +45,7 @@ impl SdlFfmpeg {
                 match frame {
                     Frame::Pakcet(packet) => {
                         if let Err(err) = decoder.send_packet(&packet) {
-                            log::error!("send packet error! {:?}", err);
+                            tracing::error!("send packet error! {:?}", err);
                         } else {
                             let mut frame = ffmpeg::frame::Video::empty();
                             while decoder.receive_frame(&mut frame).is_ok() {

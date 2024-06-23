@@ -3,14 +3,17 @@ use airplay2_protocol::airplay::AirPlayConfigBuilder;
 use airplay2_protocol::airplay_bonjour::AirPlayBonjour;
 use airplay2_protocol::control_handle::ControlHandle;
 use airplay2_protocol::net::server::Server as AirServer;
-use airplay2_protocol::setup_log;
 use kircast_desktop::airplay::VideoConsumer;
+use kircast_desktop::log_conf::init_tracing_subscriber;
 use std::sync::Arc;
+use tracing::{error, info, Level};
 
 #[tokio::main]
 async fn main() -> tokio::io::Result<()> {
-    setup_log();
+    let (_out, _err) = init_tracing_subscriber(&["kircast_desktop"], Some(Level::TRACE));
+    log_panics::init();
 
+    error!("是不是只输出一次");
     let name = "RustAirplay";
     let volume = 0.5;
     let pin_pwd = "1234";
@@ -33,10 +36,9 @@ async fn main() -> tokio::io::Result<()> {
 
     let _air = AirPlayBonjour::new(name, mserver.port, true);
 
-    log::info!(
+    info!(
         "Airplay 投屏服务开启成功，投屏名称： {}，投屏密码： {}",
-        name,
-        pin_pwd
+        name, pin_pwd
     );
 
     mserver.run().await?;
