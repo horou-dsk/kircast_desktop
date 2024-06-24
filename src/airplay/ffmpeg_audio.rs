@@ -25,6 +25,71 @@ enum AudioFrame {
     End,
 }
 
+struct RingBuffer<T, const S: usize> {
+    buffer: [T; S],
+    start: usize,
+    end: usize,
+}
+
+impl<T: Default + Copy, const S: usize> RingBuffer<T, S> {
+    fn new() -> Self {
+        Self {
+            buffer: [T::default(); S],
+            start: 0,
+            end: 0,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.start == self.end
+    }
+
+    #[inline]
+    fn push(&mut self, item: T) {
+        if (self.end + 1) % self.buffer.len() == self.start {
+            return;
+        }
+        self.buffer[self.end] = item;
+        self.end = (self.end + 1) % self.buffer.len();
+    }
+
+    fn push_slice(&mut self, item: &[T]) {
+        item.iter().for_each(|x| self.push(*x));
+    }
+
+    fn pop_slice(&mut self, out: &mut [T]) -> usize {
+        let mut count = 0;
+        for slot in out {
+            if self.is_empty() {
+                return 0;
+            }
+            *slot = self.pop_unchecked();
+            count += 1;
+        }
+        count
+    }
+
+    #[inline]
+    fn pop_unchecked(&mut self) -> T {
+        let item = self.buffer[self.start];
+        self.start = (self.start + 1) % self.buffer.len();
+        item
+    }
+
+    #[allow(dead_code)]
+    #[inline]
+    fn pop(&mut self) -> Option<T> {
+        if self.is_empty() {
+            return None;
+        }
+        Some(self.pop_unchecked())
+    }
+
+    fn len(&self) -> usize {
+        (self.end + self.buffer.len() - self.start) % self.buffer.len()
+    }
+}
+
 struct AudioCpal {
     // cvt: AudioCVT,
     device: Device,
@@ -51,61 +116,19 @@ impl Default for AudioCpal {
 
 impl AudioCpal {
     pub fn play(&self) -> anyhow::Result<Stream> {
-        let mut pcm_buf = [0; 4096];
-        let mut pcm_len = 0;
-        let mut rem_buf = [0; 2048];
-        let mut rem_len = 0;
-        let mut rem_read_pos = 0;
+        let mut ring_buf = RingBuffer::<PcmSample, 4096>::new();
         let rx = self.channel.1.clone();
         let mut config = self.config.config();
         config.buffer_size = BufferSize::Fixed(512);
         let stream = self.device.build_output_stream(
             &config,
             move |data: &mut [PcmSample], _info| {
-                if rem_len != 0 {
-                    let read_len = rem_len.min(data.len());
-                    pcm_buf[..read_len]
-                        .copy_from_slice(&rem_buf[rem_read_pos..rem_read_pos + read_len]);
-                    pcm_len += read_len;
-                    rem_len -= read_len;
-                    if rem_len != 0 {
-                        rem_read_pos += read_len;
-                    } else {
-                        rem_read_pos = 0;
-                    }
+                while ring_buf.len() < data.len() {
+                    let Ok(buf) = rx.try_recv() else { break };
+                    ring_buf.push_slice(&buf);
                 }
-                // tracing::info!("rx_buf len = {}", rx.len());
-                if pcm_len < data.len() {
-                    while let Ok(buf) = rx.try_recv() {
-                        if pcm_len + buf.len() > data.len() {
-                            let rl = data.len() - pcm_len;
-                            pcm_buf[pcm_len..data.len()].copy_from_slice(&buf[..rl]);
-                            let rem = &buf[rl..];
-                            rem_buf[..rem.len()].copy_from_slice(rem);
-                            rem_len = rem.len();
-                            pcm_len = data.len();
-                            break;
-                        } else {
-                            pcm_buf[pcm_len..pcm_len + buf.len()].copy_from_slice(&buf);
-                            pcm_len += buf.len();
-                        }
-                        if pcm_len >= data.len() {
-                            break;
-                        }
-                    }
-                }
-                if pcm_len >= data.len() {
-                    data.copy_from_slice(&pcm_buf[..data.len()]);
-                    pcm_len -= data.len();
-                } else {
-                    data[..pcm_len].copy_from_slice(&pcm_buf[..pcm_len]);
-                    data[pcm_len..].fill(Sample::EQUILIBRIUM);
-                    // let mut buf = pcm_buf[..pcm_len].iter().copied();
-                    // data.iter_mut()
-                    //     .for_each(|v| *v = buf.next().unwrap_or(Sample::EQUILIBRIUM));
-                    pcm_len = 0;
-                    tracing::info!("cpal len min");
-                }
+                let filled = ring_buf.pop_slice(data);
+                data[filled..].fill(Sample::EQUILIBRIUM);
             },
             |err| {
                 tracing::error!("stream error {err:?}");
