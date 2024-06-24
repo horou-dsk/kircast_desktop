@@ -6,14 +6,13 @@ use airplay2_protocol::net::server::Server as AirServer;
 use kircast_desktop::airplay::VideoConsumer;
 use kircast_desktop::log_conf::init_tracing_subscriber;
 use std::sync::Arc;
-use tracing::{error, info, Level};
+use tracing::{info, Level};
 
 #[tokio::main]
 async fn main() -> tokio::io::Result<()> {
     let (_out, _err) = init_tracing_subscriber(&["kircast_desktop"], Some(Level::TRACE));
     log_panics::init();
 
-    error!("是不是只输出一次");
     let name = "RustAirplay";
     let volume = 0.5;
     let pin_pwd = "1234";

@@ -299,10 +299,11 @@ impl FfMpegAudio {
                                 // tracing::info!("采样率降低 {}", rate);
                             }
                             audio_convert_frame.set_rate(rate);
-                            let pcm_samples = audio_convert_frame.data(0).chunks(2).map(|buf| {
-                                (PcmSample::from_le_bytes(buf.try_into().unwrap()) as f32 * volume)
-                                    as PcmSample
-                            });
+                            let pcm_samples =
+                                audio_convert_frame.data(0).chunks_exact(2).map(|buf| {
+                                    (PcmSample::from_le_bytes(buf.try_into().unwrap()) as f32
+                                        * volume) as PcmSample
+                                });
                             let convert = SampleRateConverter::new(
                                 pcm_samples,
                                 SampleRate(audio_convert_frame.rate()),
