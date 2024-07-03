@@ -28,33 +28,33 @@ enum AudioFrame {
     End,
 }
 
-struct RingBuffer<T, const S: usize> {
-    buffer: [T; S],
+struct RingBuffer<T, const BUFFER_LEN: usize> {
+    buffer: [T; BUFFER_LEN],
     start: usize,
     end: usize,
 }
 
-impl<T: Default + Copy, const S: usize> RingBuffer<T, S> {
+impl<T: Default + Copy, const BUFFER_LEN: usize> RingBuffer<T, BUFFER_LEN> {
     fn new() -> Self {
         Self {
-            buffer: [T::default(); S],
+            buffer: [T::default(); BUFFER_LEN],
             start: 0,
             end: 0,
         }
     }
 
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.start == self.end
     }
 
     #[inline]
     fn push(&mut self, item: T) {
-        if (self.end + 1) % self.buffer.len() == self.start {
-            tracing::warn!("超出缓冲区大小..");
+        if self.is_full() {
             return;
         }
         self.buffer[self.end] = item;
-        self.end = (self.end + 1) % self.buffer.len();
+        self.end = (self.end + 1) % BUFFER_LEN;
     }
 
     #[allow(dead_code)]
@@ -77,7 +77,7 @@ impl<T: Default + Copy, const S: usize> RingBuffer<T, S> {
     #[inline]
     fn pop_unchecked(&mut self) -> T {
         let item = self.buffer[self.start];
-        self.start = (self.start + 1) % self.buffer.len();
+        self.start = (self.start + 1) % BUFFER_LEN;
         item
     }
 
@@ -90,8 +90,14 @@ impl<T: Default + Copy, const S: usize> RingBuffer<T, S> {
         Some(self.pop_unchecked())
     }
 
+    #[inline]
     fn len(&self) -> usize {
-        (self.end + self.buffer.len() - self.start) % self.buffer.len()
+        (self.end + BUFFER_LEN - self.start) % BUFFER_LEN
+    }
+
+    #[inline]
+    fn is_full(&self) -> bool {
+        (self.end + 1) % BUFFER_LEN == self.start
     }
 }
 
@@ -308,9 +314,11 @@ impl FfMpegAudio {
                                 .unwrap();
                             audio_convert_frame.set_pts(Some(pts as i64));
                             let buffer_len = shared_buffer.lock().unwrap().len();
-                            if buffer_len > max_len && rate < 44704 {
-                                rate += channels;
-                                // tracing::info!("采样率提高 {}", rate);
+                            if buffer_len > max_len {
+                                if rate < 44704 {
+                                    rate += channels;
+                                    // tracing::info!("采样率提高 {}", rate);
+                                }
                             } else if rate > 44100 {
                                 rate -= channels;
                                 // tracing::info!("采样率降低 {}", rate);
@@ -329,6 +337,10 @@ impl FfMpegAudio {
                             );
                             let mut buffer = shared_buffer.lock().unwrap();
                             for v in convert {
+                                if buffer.is_full() {
+                                    tracing::warn!("超出缓冲区大小..");
+                                    break;
+                                }
                                 buffer.push(v);
                             }
                         }
