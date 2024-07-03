@@ -10,7 +10,10 @@ use ffmpeg::{
     format, ChannelLayout, Packet,
 };
 use ffmpeg_next::{self as ffmpeg};
-use std::{cell::UnsafeCell, sync::atomic::AtomicU64};
+use std::{
+    cell::UnsafeCell,
+    sync::{atomic::AtomicU64, Arc, Mutex},
+};
 
 use crate::{
     audio::sample_rate::SampleRateConverter,
@@ -47,12 +50,14 @@ impl<T: Default + Copy, const S: usize> RingBuffer<T, S> {
     #[inline]
     fn push(&mut self, item: T) {
         if (self.end + 1) % self.buffer.len() == self.start {
+            tracing::warn!("超出缓冲区大小..");
             return;
         }
         self.buffer[self.end] = item;
         self.end = (self.end + 1) % self.buffer.len();
     }
 
+    #[allow(dead_code)]
     fn push_slice(&mut self, item: &[T]) {
         item.iter().for_each(|x| self.push(*x));
     }
@@ -90,15 +95,17 @@ impl<T: Default + Copy, const S: usize> RingBuffer<T, S> {
     }
 }
 
+type SharedPcmBuffer = Arc<Mutex<RingBuffer<PcmSample, 65536>>>;
+
 struct AudioCpal {
     // cvt: AudioCVT,
     device: Device,
     config: SupportedStreamConfig,
-    channel: (Sender<Vec<PcmSample>>, Receiver<Vec<PcmSample>>),
+    shared_buffer: SharedPcmBuffer,
 }
 
-impl Default for AudioCpal {
-    fn default() -> Self {
+impl AudioCpal {
+    fn new(buffer: SharedPcmBuffer) -> Self {
         let host = cpal::default_host();
         let device = host.default_output_device().unwrap();
         let mut supported_configs_range = device.supported_output_configs().unwrap();
@@ -109,25 +116,21 @@ impl Default for AudioCpal {
         Self {
             device,
             config,
-            channel: crossbeam::channel::bounded(128),
+            shared_buffer: buffer, // channel: crossbeam::channel::bounded(32),
         }
     }
 }
 
 impl AudioCpal {
     pub fn play(&self) -> anyhow::Result<Stream> {
-        let mut ring_buf = RingBuffer::<PcmSample, 4096>::new();
-        let rx = self.channel.1.clone();
+        let ring_buf = self.shared_buffer.clone();
         let mut config = self.config.config();
         config.buffer_size = BufferSize::Fixed(512);
         let stream = self.device.build_output_stream(
             &config,
             move |data: &mut [PcmSample], _info| {
-                while ring_buf.len() < data.len() {
-                    let Ok(buf) = rx.try_recv() else { break };
-                    ring_buf.push_slice(&buf);
-                }
-                let filled = ring_buf.pop_slice(data);
+                let mut buf = ring_buf.lock().unwrap();
+                let filled = buf.pop_slice(data);
                 data[filled..].fill(Sample::EQUILIBRIUM);
             },
             |err| {
@@ -137,16 +140,6 @@ impl AudioCpal {
         )?;
         stream.play()?;
         Ok(stream)
-    }
-
-    pub fn push_buffer(&self, buf: Vec<PcmSample>) -> anyhow::Result<()> {
-        self.channel.0.send(buf)?;
-        Ok(())
-    }
-
-    #[inline]
-    pub fn buffer_len(&self) -> usize {
-        self.channel.1.len()
     }
 }
 
@@ -206,16 +199,17 @@ impl FfMpegAudio {
 
     fn play_audio(&self, mut decoder: Audio) {
         let rx = self.audio_channel.1.clone();
-        let samples_per_frame = self
-            .samples_per_frame
-            .load(std::sync::atomic::Ordering::Relaxed) as usize;
+        // let samples_per_frame = self
+        //     .samples_per_frame
+        //     .load(std::sync::atomic::Ordering::Relaxed) as usize;
         let (max_len, _min_len) = if decoder.codec().unwrap().id() == Id::ALAC {
-            (15000 / samples_per_frame, 6000 / samples_per_frame)
+            (15000, 6000)
         } else {
-            (8000 / samples_per_frame, 3000 / samples_per_frame)
+            (8000, 3000)
         };
         std::thread::spawn(move || {
-            let audio_cpal = AudioCpal::default();
+            let shared_buffer = Arc::new(Mutex::new(RingBuffer::new()));
+            let audio_cpal = AudioCpal::new(shared_buffer.clone());
             let sample_rate = audio_cpal.config.sample_rate().0;
             let channels = audio_cpal.config.channels() as u32;
             let mut volume = 0.5;
@@ -313,7 +307,7 @@ impl FfMpegAudio {
                                 .run(&audio, &mut audio_convert_frame)
                                 .unwrap();
                             audio_convert_frame.set_pts(Some(pts as i64));
-                            let buffer_len = audio_cpal.buffer_len();
+                            let buffer_len = shared_buffer.lock().unwrap().len();
                             if buffer_len > max_len && rate < 44704 {
                                 rate += channels;
                                 // tracing::info!("采样率提高 {}", rate);
@@ -333,7 +327,10 @@ impl FfMpegAudio {
                                 SampleRate(sample_rate),
                                 channels as u16,
                             );
-                            audio_cpal.push_buffer(convert.collect()).unwrap();
+                            let mut buffer = shared_buffer.lock().unwrap();
+                            for v in convert {
+                                buffer.push(v);
+                            }
                         }
                         AudioFrame::End => {
                             break;
