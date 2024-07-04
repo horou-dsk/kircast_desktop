@@ -10,7 +10,8 @@ use tracing::{info, Level};
 
 #[tokio::main]
 async fn main() -> tokio::io::Result<()> {
-    let (_out, _err) = init_tracing_subscriber(&["kircast_desktop"], Some(Level::TRACE));
+    let (_out, _err) =
+        init_tracing_subscriber(&["kircast_desktop", "airplay2_protocol"], Some(Level::INFO));
     log_panics::init();
 
     let name = "RustAirplay";
