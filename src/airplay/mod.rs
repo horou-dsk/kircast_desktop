@@ -69,14 +69,9 @@ impl AirPlayConsumer for VideoConsumer {
         audio_stream_info: airplay2_protocol::airplay::lib::audio_stream_info::AudioStreamInfo,
     ) {
         tracing::info!("audio_stream_info... = {:#?}", audio_stream_info);
-        self.ffmpeg_audio.set_samples_per_frame(
-            audio_stream_info.samples_per_frame,
-            audio_stream_info.audio_format.rate_channel(),
-        );
-        let result = match audio_stream_info.compression_type {
-            CompressionType::Alac => self.ffmpeg_audio.start_alac(),
-            _ => self.ffmpeg_audio.start_aac(),
-        };
+        self.ffmpeg_audio
+            .set_samples_per_frame(audio_stream_info.samples_per_frame);
+        let result = self.ffmpeg_audio.start(audio_stream_info.audio_format);
         unsafe { *self.audio_compression_type.get() = audio_stream_info.compression_type };
         if let Err(err) = result {
             tracing::error!("start audio error {err:?}");

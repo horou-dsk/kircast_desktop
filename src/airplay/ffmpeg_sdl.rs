@@ -1,4 +1,7 @@
-use std::time::Duration;
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use crossbeam::channel::{Receiver, Sender, TryRecvError};
 use ffmpeg::{format::Pixel, Packet};
@@ -20,6 +23,7 @@ pub(super) struct SdlFfmpeg {
     width: u32,
     height: u32,
     video_packet_channel: (Sender<Frame>, Receiver<Frame>),
+    video: Arc<Mutex<ffmpeg::frame::Video>>,
 }
 
 impl SdlFfmpeg {
@@ -28,11 +32,13 @@ impl SdlFfmpeg {
             width,
             height,
             video_packet_channel: crossbeam::channel::unbounded(),
+            video: Arc::new(Mutex::new(ffmpeg::frame::Video::empty())),
         }
     }
 
-    fn create_video_decoder(&self, tx: Sender<ffmpeg::frame::Video>) {
+    fn create_video_decoder(&self, tx: Sender<()>) {
         let rx = self.video_packet_channel.1.clone();
+        let out_video = self.video.clone();
         std::thread::spawn(move || {
             let codec = ffmpeg::codec::decoder::find(Id::H264).unwrap();
             let mut decoder = ffmpeg::decoder::new()
@@ -41,25 +47,29 @@ impl SdlFfmpeg {
                 .video()
                 .unwrap();
             let mut wscaler = None;
+            let mut video_frame = ffmpeg::frame::Video::empty();
             while let Ok(frame) = rx.recv() {
                 match frame {
                     Frame::Pakcet(packet) => {
                         if let Err(err) = decoder.send_packet(&packet) {
                             tracing::error!("send packet error! {:?}", err);
+                            video_frame = ffmpeg::frame::Video::empty();
                         } else {
-                            let mut frame = ffmpeg::frame::Video::empty();
-                            while decoder.receive_frame(&mut frame).is_ok() {
-                                let scaler = if let Some(s) = &mut wscaler {
-                                    s
-                                } else {
-                                    wscaler = Some(frame.converter(Pixel::RGB24).unwrap());
-                                    wscaler.as_mut().unwrap()
+                            while decoder.receive_frame(&mut video_frame).is_ok() {
+                                let scaler = match &mut wscaler {
+                                    Some(scaler) => scaler,
+                                    _ => {
+                                        wscaler =
+                                            Some(video_frame.converter(Pixel::RGB24).unwrap());
+                                        wscaler.as_mut().unwrap()
+                                    }
                                 };
-                                let mut rgb_frame = ffmpeg::frame::Video::empty();
-                                if scaler.run(&frame, &mut rgb_frame).is_err() {
-                                    wscaler = Some(frame.converter(Pixel::RGB24).unwrap());
+                                let mut rgb_frame = out_video.lock().unwrap();
+                                if scaler.run(&video_frame, &mut rgb_frame).is_err() {
+                                    *rgb_frame = ffmpeg::frame::Video::empty();
+                                    wscaler = Some(video_frame.converter(Pixel::RGB24).unwrap());
                                 } else {
-                                    tx.send(rgb_frame).unwrap();
+                                    tx.send(()).unwrap();
                                 };
                             }
                         }
@@ -77,6 +87,7 @@ impl SdlFfmpeg {
         let height = self.height;
         let (tx, rx) = crossbeam::channel::unbounded();
         self.create_video_decoder(tx);
+        let update_video = self.video.clone();
         std::thread::spawn(move || {
             let sdl_context = sdl2::init().expect("sdl init error");
             let video_subsystem = sdl_context.video().expect("sdl video error");
@@ -106,13 +117,14 @@ impl SdlFfmpeg {
                     }
                 }
                 match rx.try_recv() {
-                    Ok(rgb_frame) => {
+                    Ok(()) => {
                         canvas
                             .with_texture_canvas(&mut texture, |texture_canvas| {
                                 texture_canvas.set_draw_color(Color::RGB(0, 0, 0));
                                 texture_canvas.clear();
                             })
                             .expect("clear texture error!");
+                        let rgb_frame = update_video.lock().unwrap();
                         texture
                             .update(
                                 Rect::new(
@@ -133,7 +145,7 @@ impl SdlFfmpeg {
                     }
                     _ => (),
                 }
-                ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 144));
+                ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 60));
             }
         });
 

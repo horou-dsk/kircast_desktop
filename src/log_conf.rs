@@ -50,18 +50,6 @@ pub fn init_tracing_subscriber(
             targets: filter_targets,
             level: log_level,
         }
-        // tracing_subscriber::filter::DynFilterFn::new(move |metadata, _| {
-        //     let level = metadata.level();
-        //     let target = metadata.target();
-        //     targets.iter().chain(&["tracing_log", "panic"]);
-        //     level >= &log_level && level <= &Level::WARN && targets.contains(&target)
-        // })
-        // let filter = tracing_subscriber::filter::Targets::new()
-        //     .with_target("tracing_log", log_level)
-        //     .with_target("panic", log_level);
-        // targets.iter().fold(filter, |filter, target| {
-        //     filter.with_target(*target, log_level)
-        // })
     };
     let err_filter = tracing_subscriber::filter::Targets::new().with_targets(
         targets

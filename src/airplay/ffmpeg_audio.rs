@@ -1,4 +1,4 @@
-use airplay2_protocol::airplay::server::AudioPacket;
+use airplay2_protocol::airplay::{lib::audio_stream_info::AudioFormat, server::AudioPacket};
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     BufferSize, Device, Sample, SampleRate, Stream, SupportedStreamConfig,
@@ -10,18 +10,9 @@ use ffmpeg::{
     format, ChannelLayout, Packet,
 };
 use ffmpeg_next::{self as ffmpeg, software::resampling};
-use std::{
-    cell::UnsafeCell,
-    sync::{
-        atomic::{AtomicU16, AtomicU32, AtomicU64},
-        Arc, Mutex,
-    },
-};
+use std::sync::{atomic::AtomicU64, Arc, Mutex};
 
-use crate::{
-    audio::sample_rate::SampleRateConverter,
-    ffp::{ff_aac_par, ff_alac_par},
-};
+use crate::{audio::sample_rate::SampleRateConverter, ffp::ff_audio_codec_par};
 
 type PcmSample = i16;
 
@@ -152,54 +143,53 @@ impl AudioCpal {
 }
 
 pub(super) struct FfMpegAudio {
-    decoder: UnsafeCell<Option<Audio>>,
     audio_channel: (Sender<AudioFrame>, Receiver<AudioFrame>),
     samples_per_frame: AtomicU64,
-    rate_channel: (AtomicU32, AtomicU16),
 }
 
 impl Default for FfMpegAudio {
     fn default() -> Self {
         Self {
             samples_per_frame: 0.into(),
-            decoder: None.into(),
             audio_channel: crossbeam::channel::unbounded(),
-            rate_channel: (0.into(), 0.into()),
         }
     }
 }
 
 impl FfMpegAudio {
-    pub fn set_samples_per_frame(&self, samples_per_frame: u64, rate_channel: (u32, u16)) {
+    pub fn set_samples_per_frame(&self, samples_per_frame: u64) {
         self.samples_per_frame
             .store(samples_per_frame, std::sync::atomic::Ordering::Relaxed);
-        self.rate_channel
-            .0
-            .store(rate_channel.0, std::sync::atomic::Ordering::Relaxed);
-        self.rate_channel
-            .1
-            .store(rate_channel.1, std::sync::atomic::Ordering::Relaxed);
     }
 
-    pub fn start_alac(&self) -> anyhow::Result<()> {
-        let codec = ffmpeg::codec::decoder::find(Id::ALAC).unwrap();
+    pub fn start(&self, audio_format: AudioFormat) -> anyhow::Result<()> {
+        let (sample_rate, channels) = audio_format.rate_channel();
+        let (codec_id, codec_data) = match audio_format {
+            // codec_data is ALAC magic cookie:  44100/16/2 spf = 352
+            AudioFormat::Alac44100_16_2 => (
+                Id::ALAC,
+                "00000024616c616300000000000001600010280a0e0200ff00000000000000000000ac44",
+            ),
+            // codec_data from MPEG v4 ISO 14996-3 Section 1.6.2.1: AAC_ELD 44100/2  spf = 480
+            AudioFormat::AacEld44100_2 => (Id::AAC, "f8e85000"),
+            // codec_data from MPEG v4 ISO 14996-3 Section 1.6.2.1:  AAC-LC 44100/2 spf = 1024
+            _ => (Id::AAC, "1210"),
+        };
+        let codec = ffmpeg::codec::decoder::find(codec_id).unwrap();
         let mut ctx = ffmpeg::decoder::new();
-        let buffer = "00000024616c616300000000000001600010280a0e0200ff00000000000000000000ac44";
-        let extra_data = hex_to_buf(buffer);
-        let par =
-            unsafe { Parameters::wrap(ff_alac_par(extra_data.as_ptr(), extra_data.len()), None) };
-        ctx.set_parameters(par)?;
-        let decoder = ctx.open_as(codec)?.audio()?;
-        self.play_audio(decoder);
-        Ok(())
-    }
-
-    pub fn start_aac(&self) -> anyhow::Result<()> {
-        let codec = ffmpeg::codec::decoder::find(Id::AAC).unwrap();
-        let extra_data = hex_to_buf("f8e85000");
-        let par =
-            unsafe { Parameters::wrap(ff_aac_par(extra_data.as_ptr(), extra_data.len()), None) };
-        let mut ctx = ffmpeg::decoder::new();
+        let codec_data = hex_to_buf(codec_data);
+        let par = unsafe {
+            Parameters::wrap(
+                ff_audio_codec_par(
+                    codec_id.into(),
+                    codec_data.as_ptr(),
+                    codec_data.len(),
+                    sample_rate as i32,
+                    channels as i32,
+                ),
+                None,
+            )
+        };
         ctx.set_parameters(par)?;
         let decoder = ctx.open_as(codec)?.audio()?;
         self.play_audio(decoder);
@@ -208,28 +198,15 @@ impl FfMpegAudio {
 
     pub fn stop(&self) {
         self.audio_channel.0.send(AudioFrame::End).unwrap();
-        unsafe {
-            (*self.decoder.get()).take();
-        }
     }
 
     fn play_audio(&self, mut decoder: Audio) {
         let rx = self.audio_channel.1.clone();
-        // let samples_per_frame = self
-        //     .samples_per_frame
-        //     .load(std::sync::atomic::Ordering::Relaxed) as usize;
-        let (from_rate, from_channel) = (
-            self.rate_channel
-                .0
-                .load(std::sync::atomic::Ordering::Relaxed),
-            self.rate_channel
-                .1
-                .load(std::sync::atomic::Ordering::Relaxed),
-        );
+        let decoder_rate = decoder.rate();
         let (max_len, _min_len) = if decoder.codec().unwrap().id() == Id::ALAC {
-            (from_rate as usize / 3, from_rate as usize / 6)
+            (decoder_rate as usize / 3, decoder_rate as usize / 6)
         } else {
-            (from_rate as usize / 6, from_rate as usize / 12)
+            (decoder_rate as usize / 6, decoder_rate as usize / 12)
         };
         std::thread::spawn(move || {
             let shared_buffer = Arc::new(Mutex::new(RingBuffer::new()));
@@ -240,15 +217,15 @@ impl FfMpegAudio {
             if let Ok(_stream) = audio_cpal.play() {
                 let mut audio = ffmpeg::frame::Audio::empty();
                 let mut audio_convert_frame = ffmpeg::frame::Audio::empty();
-                let mut rate = from_rate;
-                let max_rate = from_rate + 604;
+                let mut rate = decoder_rate;
+                let max_rate = decoder_rate + 604;
                 let mut sample_convert = resampling::Context::get(
                     decoder.format(),
-                    ChannelLayout::default(from_channel as i32),
-                    from_rate,
+                    decoder.channel_layout(),
+                    decoder_rate,
                     format::Sample::I16(format::sample::Type::Packed),
-                    ChannelLayout::STEREO,
-                    from_rate,
+                    ChannelLayout::default(channels as i32),
+                    decoder_rate,
                 )
                 .unwrap();
                 while let Ok(audio_frame) = rx.recv() {
@@ -275,7 +252,7 @@ impl FfMpegAudio {
                                     rate += channels;
                                     // tracing::info!("采样率提高 {}", rate);
                                 }
-                            } else if rate > from_rate {
+                            } else if rate > decoder_rate {
                                 rate -= channels;
                                 // tracing::info!("采样率降低 {}", rate);
                             }

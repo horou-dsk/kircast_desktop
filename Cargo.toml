@@ -10,9 +10,9 @@ airplay2-protocol = { git = "https://github.com/horou-dsk/airplay-protocol.git" 
 anyhow = "1.0.71"
 chrono = "0.4"
 tokio = { version = "1", features = ["full"] }
-ffmpeg-next = { version = "6", features = ["default"] }
-ffmpeg-sys-next = { version = "6", features = ["default"] }
-sdl2 = "0.35"
+ffmpeg-next = { version = "7", features = ["default"] }
+ffmpeg-sys-next = { version = "7", features = ["default"] }
+sdl2 = "0.37"
 crossbeam = "0.8"
 cpal = { version = "0.15" }
 dasp = { version = "0.11", features = [
