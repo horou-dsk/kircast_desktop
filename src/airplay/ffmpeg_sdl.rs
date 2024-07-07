@@ -118,27 +118,29 @@ impl SdlFfmpeg {
                 }
                 match rx.try_recv() {
                     Ok(()) => {
-                        canvas
-                            .with_texture_canvas(&mut texture, |texture_canvas| {
-                                texture_canvas.set_draw_color(Color::RGB(0, 0, 0));
-                                texture_canvas.clear();
-                            })
-                            .expect("clear texture error!");
                         let rgb_frame = update_video.lock().unwrap();
-                        texture
-                            .update(
-                                Rect::new(
-                                    ((width - rgb_frame.width()) / 2) as i32,
-                                    ((height - rgb_frame.height()) / 2) as i32,
-                                    rgb_frame.width(),
-                                    rgb_frame.height(),
-                                ),
-                                rgb_frame.data(0),
-                                rgb_frame.stride(0),
-                            )
-                            .unwrap();
-                        canvas.copy(&texture, None, None).unwrap();
-                        canvas.present();
+                        if !unsafe { rgb_frame.is_empty() } {
+                            canvas
+                                .with_texture_canvas(&mut texture, |texture_canvas| {
+                                    texture_canvas.set_draw_color(Color::RGB(0, 0, 0));
+                                    texture_canvas.clear();
+                                })
+                                .expect("clear texture error!");
+                            texture
+                                .update(
+                                    Rect::new(
+                                        ((width - rgb_frame.width()) / 2) as i32,
+                                        ((height - rgb_frame.height()) / 2) as i32,
+                                        rgb_frame.width(),
+                                        rgb_frame.height(),
+                                    ),
+                                    rgb_frame.data(0),
+                                    rgb_frame.stride(0),
+                                )
+                                .unwrap();
+                            canvas.copy(&texture, None, None).unwrap();
+                            canvas.present();
+                        }
                     }
                     Err(TryRecvError::Disconnected) => {
                         break;

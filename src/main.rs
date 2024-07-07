@@ -11,7 +11,6 @@ use tracing::{info, Level};
 #[tokio::main]
 async fn main() -> tokio::io::Result<()> {
     let (_out, _err) = init_tracing_subscriber(&["kircast_desktop"], Some(Level::INFO));
-    log_panics::init();
 
     let name = "RustAirplay";
     let volume = 0.5;
